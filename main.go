@@ -98,11 +98,7 @@ func main() {
 	defer l.Close()
 
 	server.HandleHttp(mux)
-<<<<<<< HEAD
-	err = router.RunListener(l)
-=======
 	err = http.Serve(l, corsMiddleware(mux))
->>>>>>> 2af64c4 (Replace old dashboard/homepage with uiapi, add CORS middleware)
 
 	log.Fatalf("Failed to serve: %v", err)
 }
