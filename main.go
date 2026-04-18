@@ -11,8 +11,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/wk-y/rama-swap/llama"
-	"github.com/wk-y/rama-swap/microservices/dashboard"
-	"github.com/wk-y/rama-swap/microservices/homepage"
 	"github.com/wk-y/rama-swap/microservices/scheduling"
 	"github.com/wk-y/rama-swap/server"
 	"github.com/wk-y/rama-swap/server/gcas"
@@ -20,9 +18,24 @@ import (
 	"github.com/wk-y/rama-swap/server/openapi"
 	schedulersubscriber "github.com/wk-y/rama-swap/server/scheduler_subscriber"
 	"github.com/wk-y/rama-swap/tracker"
+	"github.com/wk-y/rama-swap/uiapi"
 )
 
 const EX_USAGE = 64
+
+// corsMiddleware wraps an http.Handler to add CORS headers for development
+func corsMiddleware(handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE, PUT")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		handler.ServeHTTP(w, r)
+	})
+}
 
 func main() {
 	args, rest, err := parseArgs(os.Args)
@@ -68,10 +81,8 @@ func main() {
 	cas := gcas.NewGCAS(gcasdb)
 	tracker.DefaultTracker.Subscribe(gcassubscriber.NewGCASSubscriber(cas))
 	server := server.NewServer(ramalama, scheduler)
-	dashboard := dashboard.NewDashboard(tracker.DefaultTracker)
-	dashboard.RegisterHandlers(mux)
-	homepage := homepage.NewHomepage()
-	homepage.RegisterHandlers(mux)
+	ui := uiapi.New(tracker.DefaultTracker, ramalama)
+	ui.RegisterHandlers(mux)
 
 	server.ModelNameMangler = func(s string) string {
 		return strings.ReplaceAll(s, "/", "_")
@@ -87,7 +98,11 @@ func main() {
 	defer l.Close()
 
 	server.HandleHttp(mux)
+<<<<<<< HEAD
 	err = router.RunListener(l)
+=======
+	err = http.Serve(l, corsMiddleware(mux))
+>>>>>>> 2af64c4 (Replace old dashboard/homepage with uiapi, add CORS middleware)
 
 	log.Fatalf("Failed to serve: %v", err)
 }
