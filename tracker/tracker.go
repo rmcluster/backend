@@ -4,13 +4,12 @@ import (
 	"encoding/json"
 	"log"
 	"math"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
 	"sync"
 	"time"
-
-	"net"
 
 	"github.com/gin-gonic/gin"
 )
@@ -171,8 +170,9 @@ func (t *Tracker) Announce(c *gin.Context) {
 				// preventing the timer from being stopped. To prevent that, we verify that the last seen time
 				// has not been changed.
 				if t.RpcServers[clientId].LastSeen.Equal(announceTime) {
+					serverInfo := t.RpcServers[clientId].RpcServerInfo
 					delete(t.RpcServers, clientId)
-					t.notifyNodeRemoved(t.RpcServers[clientId].RpcServerInfo)
+					t.notifyNodeRemoved(serverInfo)
 					log.Printf("Removed %s from tracker", clientId)
 				}
 			}),

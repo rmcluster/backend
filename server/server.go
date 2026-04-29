@@ -85,6 +85,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			return "", fmt.Errorf("missing model key")
 		}
 
+		log.Printf("Chat completion requested for model %s", *modelGet.Model)
 		return *modelGet.Model, nil
 	})
 }

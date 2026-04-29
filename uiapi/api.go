@@ -2,6 +2,9 @@ package uiapi
 
 import (
 	"encoding/json"
+	"crypto/rand"
+	"encoding/json"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"math"
@@ -10,6 +13,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
 )
 
 type apiModel struct {
@@ -59,6 +69,20 @@ type dashboardDataResponse struct {
 	Servers []dashboardServerSnapshot `json:"servers"`
 }
 
+type connectInfoResponse struct {
+	Host string `json:"host"`
+	Port int    `json:"port"`
+	Token string `json:"token"`
+}
+
+type deviceRegisterRequest struct {
+	DeviceID string `json:"device_id"`
+	Label    string `json:"label"`
+	IP       string `json:"ip"`
+	RPCPort  int    `json:"rpc_port"`
+	Token    string `json:"token"`
+}
+
 func (s *UIApi) handleAPIRoot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -70,6 +94,236 @@ func (s *UIApi) handleAPIRoot(w http.ResponseWriter, r *http.Request) {
 		"search":    "/api/ui/models/search",
 		"dashboard": "/api/ui/dashboard",
 	})
+}
+
+		"connect":   "/api/ui/connect-info",
+	})
+}
+
+func (s *UIApi) handleAPIConnectInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	host, port := preferredConnectHostPort(r)
+	token, err := s.issueConnectToken()
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "failed to mint connect token")
+		return
+	}
+
+	writeAPIJSON(w, http.StatusOK, connectInfoResponse{Host: host, Port: port, Token: token})
+}
+
+func (s *UIApi) handleAPIDeviceRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req deviceRegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	if strings.TrimSpace(req.DeviceID) == "" || strings.TrimSpace(req.IP) == "" || req.RPCPort <= 0 {
+		writeAPIError(w, http.StatusBadRequest, "missing device_id, ip, or rpc_port")
+		return
+	}
+
+	if net.ParseIP(strings.TrimSpace(req.IP)) == nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid ip")
+		return
+	}
+
+	if !s.consumeConnectToken(strings.TrimSpace(req.Token)) {
+		writeAPIError(w, http.StatusUnauthorized, "invalid or expired token")
+		return
+	}
+
+	now := time.Now()
+	rec := registeredDevice{
+		DeviceID: strings.TrimSpace(req.DeviceID),
+		Label:    strings.TrimSpace(req.Label),
+		IP:       strings.TrimSpace(req.IP),
+		RPCPort:  req.RPCPort,
+		Token:    strings.TrimSpace(req.Token),
+		LastSeen: now,
+	}
+
+	s.deviceLock.Lock()
+	s.deviceRegistry[rec.DeviceID] = rec
+	s.deviceLock.Unlock()
+
+	announceURL := fmt.Sprintf("/announce?ip=%s&port=%d&model=%s", rec.IP, rec.RPCPort, rec.Label)
+	r2, _ := http.NewRequest(http.MethodGet, announceURL, nil)
+	s.tracker.Announce(noopResponseWriter{}, r2)
+
+	writeAPIJSON(w, http.StatusCreated, map[string]any{
+		"status":   "registered",
+		"endpoint": fmt.Sprintf("%s:%d", rec.IP, rec.RPCPort),
+	})
+}
+
+func (s *UIApi) handleAPIDeviceAction(w http.ResponseWriter, r *http.Request) {
+	trimmed := strings.TrimPrefix(r.URL.Path, "/api/v1/devices/")
+	parts := strings.Split(strings.Trim(trimmed, "/"), "/")
+	if len(parts) != 2 || parts[1] != "keepalive" {
+		writeAPIError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	deviceID := parts[0]
+	s.deviceLock.Lock()
+	rec, ok := s.deviceRegistry[deviceID]
+	if ok {
+		rec.LastSeen = time.Now()
+		s.deviceRegistry[deviceID] = rec
+	}
+	s.deviceLock.Unlock()
+
+	if !ok {
+		writeAPIError(w, http.StatusNotFound, "device not found")
+		return
+	}
+
+	if auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "); auth == "" || auth != rec.Token {
+		writeAPIError(w, http.StatusUnauthorized, "invalid token")
+		return
+	}
+
+	announceURL := fmt.Sprintf("/announce?ip=%s&port=%d&model=%s", rec.IP, rec.RPCPort, rec.Label)
+	r2, _ := http.NewRequest(http.MethodGet, announceURL, nil)
+	s.tracker.Announce(noopResponseWriter{}, r2)
+
+	writeAPIJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
+type noopResponseWriter struct{}
+
+func (noopResponseWriter) Header() http.Header { return make(http.Header) }
+func (noopResponseWriter) Write([]byte) (int, error) { return 0, nil }
+func (noopResponseWriter) WriteHeader(statusCode int) {}
+
+func (s *UIApi) issueConnectToken() (string, error) {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	token := hex.EncodeToString(raw)
+
+	now := time.Now()
+	expires := now.Add(2 * time.Minute)
+
+	s.connectLock.Lock()
+	for k, v := range s.connectTokens {
+		if now.After(v) {
+			delete(s.connectTokens, k)
+		}
+	}
+	s.connectTokens[token] = expires
+	s.connectLock.Unlock()
+
+	return token, nil
+}
+
+func (s *UIApi) consumeConnectToken(token string) bool {
+	if token == "" {
+		return false
+	}
+	now := time.Now()
+
+	s.connectLock.Lock()
+	defer s.connectLock.Unlock()
+
+	expires, ok := s.connectTokens[token]
+	if !ok || now.After(expires) {
+		delete(s.connectTokens, token)
+		return false
+	}
+
+	delete(s.connectTokens, token)
+	return true
+}
+
+func preferredConnectHostPort(r *http.Request) (string, int) {
+	host := strings.TrimSpace(r.Host)
+	port := 4917
+
+	if parsedHost, parsedPort, err := net.SplitHostPort(host); err == nil {
+		host = strings.Trim(parsedHost, "[]")
+		if p, err := strconv.Atoi(parsedPort); err == nil && p > 0 {
+			port = p
+		}
+	} else {
+		host = strings.Trim(host, "[]")
+	}
+
+	if host == "" {
+		host = "localhost"
+	}
+
+	if !isLoopbackHost(host) {
+		return host, port
+	}
+
+	if lanIP, ok := firstNonLoopbackIPv4(); ok {
+		return lanIP, port
+	}
+
+	return host, port
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func firstNonLoopbackIPv4() (string, bool) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "", false
+	}
+
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+
+			if ip == nil || ip.IsLoopback() {
+				continue
+			}
+
+			if v4 := ip.To4(); v4 != nil {
+				return v4.String(), true
+			}
+		}
+	}
+
+	return "", false
 }
 
 func (s *UIApi) handleAPIModels(w http.ResponseWriter, r *http.Request) {

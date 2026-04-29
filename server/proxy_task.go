@@ -36,7 +36,15 @@ func (p *proxyTask) PerformInference(instance scheduling.Instance) (err error) {
 		}
 	}()
 	log.Printf("Proxying request for model %v", p.model)
-	// forward the request to the openai client
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			log.Printf("Proxy aborted for model %v: %v", p.model, recovered)
+		}
+	}()
+
+	// Forward the request to the upstream llama server. The Go reverse proxy
+	// uses a panic-based abort path for client disconnects and other write
+	// failures; recover so that a cancelled stream does not crash the server.
 	instance.ReverseProxy().ServeHTTP(p.w, p.r)
 	return
 }

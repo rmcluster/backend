@@ -35,18 +35,18 @@ type NodeAllocationInfo struct {
 
 func NewPartitioningScheduler(instanceFactory InstanceFactory, parallelismTarget int) *PartitioningScheduler {
 	scheduler := &PartitioningScheduler{
-		instanceFactory:   instanceFactory,
-		modelQueues:       make(map[string][]*timestampedTask),
-		unallocatedNodes:  make(map[string]Node),
-		allocatedNodes:    make(map[string]NodeAllocationInfo),
-		idleInstances:     make(map[string][]instanceInfo),
-		newTasksChan:      make(chan Task),
-		nodeEventChan:     make(chan NodeEvent),
-		taskCancelledChan: make(chan Task),
-		taskCompletedChan: make(chan TaskCompletionMessage),
-		parallelismTarget: parallelismTarget,
-		idleBias:          10 * time.Second,
-		instanceDeadChan:  make(chan instanceInfo),
+		instanceFactory:    instanceFactory,
+		modelQueues:        make(map[string][]*timestampedTask),
+		unallocatedNodes:   make(map[string]Node),
+		allocatedNodes:     make(map[string]NodeAllocationInfo),
+		idleInstances:      make(map[string][]instanceInfo),
+		newTasksChan:       make(chan Task, 16),
+		nodeConnectChan:    make(chan Node, 16),
+		nodeDisconnectChan: make(chan Node, 16),
+		taskCancelledChan:  make(chan Task, 16),
+		taskCompletedChan:  make(chan TaskCompletionMessage, 16),
+		parallelismTarget:  parallelismTarget,
+		idleBias:           10 * time.Second,
 	}
 	go scheduler.run()
 	return scheduler
@@ -95,6 +95,7 @@ type NodeEvent struct {
 
 // OnNewTask implements [Scheduler].
 func (s *PartitioningScheduler) OnNewTask(task Task) {
+	log.Printf("PartitioningScheduler: received task for model %s", task.Model())
 	s.newTasksChan <- task
 }
 
@@ -141,11 +142,19 @@ taskHandlerLoop:
 			task = s.modelQueues[highestScoringQueue][0].task
 			s.modelQueues[highestScoringQueue] = s.modelQueues[highestScoringQueue][1:]
 		} else { // wait for a task to arrive
+<<<<<<< HEAD
 		awaitTaskLoop:
 			for {
 				select {
 				case task = <-s.newTasksChan:
 					break awaitTaskLoop
+=======
+		taskWaitLoop:
+			for {
+				select {
+				case task = <-s.newTasksChan:
+					break taskWaitLoop
+>>>>>>> 3131dac (Try to get frontend UI and server-node connection working)
 				case taskCompletionMessage := <-s.taskCompletedChan:
 					s.handleTaskCompletion(taskCompletionMessage)
 				case nodeEvent := <-s.nodeEventChan:
@@ -237,6 +246,8 @@ taskHandlerLoop:
 				break
 			}
 		}
+
+		log.Printf("PartitioningScheduler: starting model %s with %d nodes", task.Model(), len(nodes))
 
 		instance, err := s.instanceFactory.StartInstance(task.Model(), nodes)
 		if err != nil {

@@ -1,8 +1,11 @@
 package scheduling
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"os/exec"
+	"strings"
 	"sync"
 
 	"github.com/wk-y/rama-swap/llama"
@@ -25,6 +28,8 @@ type instanceFactoryImpl struct {
 
 // StartInstance implements [InstanceFactory].
 func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instance, error) {
+	log.Printf("Starting instance for model %s on %d nodes", model, len(nodes))
+
 	// build list of rpc nodes
 	rpcNodes := make([]llama.RpcNode, len(nodes))
 	for idx, node := range nodes {
@@ -48,12 +53,16 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 		// guard critical section
 		i.Lock()
 		defer i.Unlock()
+		offloadLayers := chooseOffloadLayers(nodes)
 
 		cmd := i.llmService.ServeCommand(context.Background(), llama.ServeArgs{
-			Model:    model,
-			RpcNodes: rpcNodes,
-			Port:     port,
+			Model:         model,
+			RpcNodes:      rpcNodes,
+			Port:          port,
+			OffloadLayers: &offloadLayers,
 		})
+		cmd.Stdout = newProcessLogWriter(model, "stdout")
+		cmd.Stderr = newProcessLogWriter(model, "stderr")
 
 		err := cmd.Start()
 		if err != nil {
@@ -69,6 +78,8 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 	if err != nil {
 		return nil, err
 	}
+	log.Printf("Started instance process for model %s on port %d", model, port)
+	log.Printf("Instance command: %s", strings.Join(cmd.Args, " "))
 
 	dead := make(chan struct{})
 
@@ -89,6 +100,69 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 		dead:    dead,
 		model:   model,
 	}, nil
+}
+
+func chooseOffloadLayers(nodes []Node) int {
+	const defaultOffloadLayers = 8
+	const minRemoteBufferBytes = 256 * 1024 * 1024
+
+	if len(nodes) == 0 {
+		return 0
+	}
+
+	var smallestMaxSize int64 = -1
+	for _, node := range nodes {
+		maxSize := node.MaxSize()
+		if maxSize <= 0 {
+			return 0
+		}
+		if smallestMaxSize < 0 || maxSize < smallestMaxSize {
+			smallestMaxSize = maxSize
+		}
+	}
+
+	if smallestMaxSize < minRemoteBufferBytes {
+		return 0
+	}
+
+	return defaultOffloadLayers
+}
+
+type processLogWriter struct {
+	model string
+	stream string
+	buffer bytes.Buffer
+}
+
+func newProcessLogWriter(model string, stream string) *processLogWriter {
+	return &processLogWriter{model: model, stream: stream}
+}
+
+func (w *processLogWriter) Write(p []byte) (int, error) {
+	w.buffer.Write(p)
+	for {
+		line, err := w.buffer.ReadString('\n')
+		if err == bytes.ErrTooLarge {
+			break
+		}
+		if err != nil {
+			if w.buffer.Len() == 0 {
+				break
+			}
+			remaining := strings.TrimSpace(w.buffer.String())
+			if remaining != "" {
+				log.Printf("[llama %s %s] %s", w.model, w.stream, remaining)
+			}
+			w.buffer.Reset()
+			break
+		}
+		line = strings.TrimRight(line, "\n")
+		line = strings.TrimRight(line, "\r")
+		if line != "" {
+			log.Printf("[llama %s %s] %s", w.model, w.stream, line)
+		}
+	}
+	return len(p), nil
 }
 
 var _ InstanceFactory = (*instanceFactoryImpl)(nil)
