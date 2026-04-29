@@ -1,0 +1,616 @@
+openapi: 3.1.0
+info:
+  title: rmcluster UI API
+  version: 1.0.0
+  summary: Backend contract required by the React frontend
+  description: This spec defines the API endpoints required by the current frontend.
+servers:
+  - url: http://127.0.0.1:4917
+    description: Local development
+
+tags:
+  - name: ui
+  - name: devices
+  - name: models
+  - name: chat
+
+paths:
+  /api/ui:
+    get:
+      tags: [ui]
+      summary: Get UI API root links
+      operationId: getUiApiRoot
+      responses:
+        '200':
+          description: API index
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UiApiRoot'
+
+  /api/ui/connect-info:
+    get:
+      tags: [devices]
+      summary: Get one-time device connect payload
+      description: |
+        Returns host, port, and single-use token for mobile device onboarding.
+        Token should expire quickly (recommended <= 2 minutes) and be consumed once.
+      operationId: getConnectInfo
+      responses:
+        '200':
+          description: Connection payload for QR/code flow
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectInfo'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/devices/register:
+    post:
+      tags: [devices]
+      summary: Register a device with one-time connect token
+      operationId: registerDevice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceRegisterRequest'
+      responses:
+        '201':
+          description: Device registered and announced
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterDeviceResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/devices/{device_id}/keepalive:
+    post:
+      tags: [devices]
+      summary: Keep registered device alive
+      operationId: keepAliveDevice
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      security:
+        - deviceBearerToken: []
+      responses:
+        '200':
+          description: Keepalive accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusOk'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /api/ui/dashboard:
+    get:
+      tags: [devices]
+      summary: Get currently connected/known servers
+      operationId: getDashboard
+      responses:
+        '200':
+          description: List of servers visible to the cluster
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardResponse'
+
+  /api/ui/models:
+    get:
+      tags: [models]
+      summary: List installed and available models
+      operationId: listModels
+      responses:
+        '200':
+          description: Model catalog for UI
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelsResponse'
+
+  /api/ui/models/search:
+    get:
+      tags: [models]
+      summary: Search Hugging Face model repos
+      operationId: searchModels
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+          description: User query or owner/repo substring
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '502':
+          $ref: '#/components/responses/Error'
+
+  /api/ui/models/hf:
+    post:
+      tags: [models]
+      summary: Add Hugging Face model reference to local catalog
+      operationId: addHfModel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddHfModelRequest'
+      responses:
+        '201':
+          description: Added model
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Model'
+        '400':
+          $ref: '#/components/responses/Error'
+
+  /api/ui/models/local:
+    post:
+      tags: [models]
+      summary: Upload local GGUF model
+      operationId: uploadLocalModel
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [model_file]
+              properties:
+                model_file:
+                  type: string
+                  format: binary
+                  description: .gguf file
+                name:
+                  type: string
+                parameters:
+                  type: string
+                quantization:
+                  type: string
+      responses:
+        '201':
+          description: Uploaded model
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Model'
+        '400':
+          $ref: '#/components/responses/Error'
+
+  /v1/chat/completions:
+    post:
+      tags: [chat]
+      summary: OpenAI-compatible chat completions endpoint
+      operationId: createChatCompletion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpenAIChatCompletionRequest'
+      responses:
+        '200':
+          description: Non-streaming JSON response or streaming SSE when stream=true
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenAIChatCompletionResponse'
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  SSE lines of the form `data: {json}\n\n`, ending with `data: [DONE]\n\n`.
+
+  /api/ui/chats:
+    post:
+      tags: [chat]
+      summary: Record that a chat session started
+      description: |
+        Simple metadata endpoint for the UI to register conversation lifecycle.
+        This does not replace `/v1/chat/completions`.
+      operationId: startChatSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartChatRequest'
+      responses:
+        '201':
+          description: Chat session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatSession'
+        '400':
+          $ref: '#/components/responses/Error'
+
+  /api/ui/chats/{chat_id}/events:
+    post:
+      tags: [chat]
+      summary: Append sent/received/error event for a chat
+      operationId: appendChatEvent
+      parameters:
+        - $ref: '#/components/parameters/ChatId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatEventRequest'
+      responses:
+        '202':
+          description: Event accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusAccepted'
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /api/ui/chats/{chat_id}:
+    get:
+      tags: [chat]
+      summary: Get chat metadata and events
+      operationId: getChatSession
+      parameters:
+        - $ref: '#/components/parameters/ChatId'
+      responses:
+        '200':
+          description: Chat session detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatSessionDetail'
+        '404':
+          $ref: '#/components/responses/Error'
+
+components:
+  securitySchemes:
+    deviceBearerToken:
+      type: http
+      scheme: bearer
+      bearerFormat: one-time-device-token
+
+  parameters:
+    DeviceId:
+      name: device_id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    ChatId:
+      name: chat_id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+
+  responses:
+    Error:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    UiApiRoot:
+      type: object
+      required: [models, search, dashboard, connect]
+      properties:
+        models:
+          type: string
+        search:
+          type: string
+        dashboard:
+          type: string
+        connect:
+          type: string
+
+    ConnectInfo:
+      type: object
+      required: [host, port, token, connect_uri, token_expires_in_seconds]
+      properties:
+        host:
+          type: string
+          example: 192.168.1.42
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          example: 4917
+        token:
+          type: string
+          pattern: '^[a-f0-9]{32}$'
+          example: d8fa1b262f174b06a5ee42a2f2d68f4a
+        connect_uri:
+          type: string
+          description: Must follow the frontend URI format exactly.
+          pattern: '^rmcluster://connect\\?url=.*&port=[0-9]+&token=[a-f0-9]{32}$'
+          example: rmcluster://connect?url=192.168.1.42&port=4917&token=d8fa1b262f174b06a5ee42a2f2d68f4a
+        token_expires_in_seconds:
+          type: integer
+          minimum: 1
+          example: 120
+
+    DeviceRegisterRequest:
+      type: object
+      required: [device_id, ip, rpc_port, token]
+      properties:
+        device_id:
+          type: string
+        label:
+          type: string
+        ip:
+          type: string
+          format: ipv4
+        rpc_port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        token:
+          type: string
+
+    RegisterDeviceResponse:
+      type: object
+      required: [status, endpoint]
+      properties:
+        status:
+          type: string
+          enum: [registered]
+        endpoint:
+          type: string
+          example: 192.168.1.55:50052
+
+    DashboardServer:
+      type: object
+      required: [ip, port, hardware_model]
+      properties:
+        ip:
+          type: string
+          format: ipv4
+        port:
+          type: integer
+        hardware_model:
+          type: string
+        max_size:
+          type: integer
+          nullable: true
+          description: Max model size in bytes
+        battery:
+          type: number
+          nullable: true
+          description: Percentage as 0..100 from server
+        temperature:
+          type: number
+          nullable: true
+          description: Celsius
+
+    DashboardResponse:
+      type: object
+      required: [servers]
+      properties:
+        servers:
+          type: array
+          items:
+            $ref: '#/components/schemas/DashboardServer'
+
+    Model:
+      type: object
+      required: [model, display_name, source, link_href, link_label]
+      properties:
+        model:
+          type: string
+          example: hf:bartowski/Llama-3.2-3B-Instruct-GGUF
+        display_name:
+          type: string
+        parameters:
+          type: string
+        architecture:
+          type: string
+        quantization:
+          type: string
+        source:
+          type: string
+        link_href:
+          type: string
+          format: uri
+        link_label:
+          type: string
+
+    ModelsResponse:
+      type: object
+      required: [models]
+      properties:
+        models:
+          type: array
+          items:
+            $ref: '#/components/schemas/Model'
+
+    SearchResult:
+      type: object
+      required: [model, display_name, downloads, link_href]
+      properties:
+        model:
+          type: string
+          description: Usually `hf:owner/repo` format
+        display_name:
+          type: string
+        downloads:
+          type: integer
+        link_href:
+          type: string
+          format: uri
+
+    SearchResponse:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResult'
+
+    AddHfModelRequest:
+      type: object
+      required: [model]
+      properties:
+        model:
+          type: string
+          description: '`hf:owner/repo` or accepted backend shorthand'
+
+    OpenAIMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [system, user, assistant]
+        content:
+          type: string
+
+    OpenAIChatCompletionRequest:
+      type: object
+      required: [model, messages]
+      properties:
+        model:
+          type: string
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/OpenAIMessage'
+        stream:
+          type: boolean
+          default: false
+
+    OpenAIChatCompletionResponse:
+      type: object
+      additionalProperties: true
+      description: OpenAI-compatible response payload
+
+    StartChatRequest:
+      type: object
+      required: [chat_id, model]
+      properties:
+        chat_id:
+          type: string
+          description: Client-provided stable conversation ID
+        model:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        user_id:
+          type: string
+          description: Reserved for future auth/multi-user support
+
+    ChatSession:
+      type: object
+      required: [chat_id, model, started_at, status]
+      properties:
+        chat_id:
+          type: string
+        model:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [active, closed]
+
+    ChatEventRequest:
+      type: object
+      required: [event_type, timestamp]
+      properties:
+        event_type:
+          type: string
+          enum:
+            [
+              message_sent,
+              token_received,
+              message_completed,
+              stream_error,
+              chat_closed,
+            ]
+        message_id:
+          type: string
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+          description: Full message for `message_sent` or `message_completed`
+        token:
+          type: string
+          description: Single streamed token/chunk when `event_type=token_received`
+        error:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    ChatEvent:
+      allOf:
+        - $ref: '#/components/schemas/ChatEventRequest'
+        - type: object
+          required: [sequence]
+          properties:
+            sequence:
+              type: integer
+              minimum: 1
+
+    ChatSessionDetail:
+      allOf:
+        - $ref: '#/components/schemas/ChatSession'
+        - type: object
+          required: [events]
+          properties:
+            events:
+              type: array
+              items:
+                $ref: '#/components/schemas/ChatEvent'
+
+    StatusOk:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+
+    StatusAccepted:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [accepted]
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
