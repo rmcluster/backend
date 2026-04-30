@@ -6,7 +6,7 @@ package gcas
 type GCAS interface {
 	CAS
 	AddNode(node NamedCAS)
-	RemoveNode(node NamedCAS)
+	RemoveNode(nodeName string)
 }
 
 type NamedCAS interface {
