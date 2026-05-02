@@ -142,6 +142,20 @@ func (g *GcasImpl) Put(ctx context.Context, hash Hash, data []byte) error {
 
 	var nodes []string
 
+	// check if the chunk already exists
+	{
+		var nodeID string
+		err := g.db.QueryRowContext(ctx, "SELECT node_id FROM chunks WHERE hash = ?", hash[:]).Scan(&nodeID)
+		if err != sql.ErrNoRows {
+			if err != nil {
+				return err
+			}
+
+			// if the chunk already exists, return HashExistsError
+			return HashExistsError{}
+		}
+	}
+
 	g.nodesLock.RLock()
 	defer g.nodesLock.RUnlock()
 	for id := range g.nodes {
