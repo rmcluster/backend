@@ -163,7 +163,7 @@ func (g *GcasImpl) Put(ctx context.Context, hash Hash, data []byte) error {
 	}
 
 	if len(nodes) == 0 {
-		return errors.New("no nodes available")
+		return ErrNoNodes{}
 	}
 
 	idx := rand.Intn(len(nodes))
