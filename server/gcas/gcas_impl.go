@@ -9,6 +9,13 @@ import (
 	"sync"
 )
 
+// NewGCAS creates a new GCAS instance.
+// db is the database connection to use for storing metadata
+func NewGCAS(db *sql.DB) GCAS {
+	gcas := NewGcasImpl(db)
+	return gcas
+}
+
 type GcasImpl struct {
 	db *sql.DB
 	// nodes connected to the cluster
