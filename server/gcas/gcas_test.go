@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 )
@@ -36,6 +37,42 @@ func TestGCASPutGet(t *testing.T) {
 	// compare retrieved data with original data
 	if !bytes.Equal(data, retrievedData) {
 		t.Errorf("expected %s, got %s", data, retrievedData)
+	}
+}
+
+// test double-put behavior
+// the first put should succeed, whereas the second put should throw HashExistsError
+func TestGCASDoublePut(t *testing.T) {
+	gcas, db, err := createTestGCAS(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// test data
+	data := []byte("hello")
+	dataHash := sha256.Sum256(data)
+
+	// put data in CAS
+	err = gcas.Put(context.Background(), dataHash, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// test that the CAS actually has the data
+	retrievedData, err := gcas.Get(context.Background(), dataHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// compare retrieved data with original data
+	if !bytes.Equal(data, retrievedData) {
+		t.Errorf("expected %s, got %s", data, retrievedData)
+	}
+
+	// test that the CAS already has the data
+	err = gcas.Put(context.Background(), dataHash, data)
+	if !errors.Is(err, HashExistsError{}) {
+		t.Errorf("expected HashExistsError, got %v", err)
 	}
 }
 
