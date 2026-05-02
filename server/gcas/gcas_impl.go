@@ -49,7 +49,7 @@ func (g *GcasImpl) Delete(ctx context.Context, hash Hash) error {
 	// which node has the chunk?
 	// query chunks table in database
 	var nodeID string
-	err := g.db.QueryRowContext(ctx, "SELECT node_id FROM chunks WHERE hash = ?", hash).Scan(&nodeID)
+	err := g.db.QueryRowContext(ctx, "SELECT node_id FROM chunks WHERE hash = ?", hash[:]).Scan(&nodeID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return HashNotFoundError{}
@@ -67,7 +67,7 @@ func (g *GcasImpl) Delete(ctx context.Context, hash Hash) error {
 	}
 
 	// delete from the database
-	_, err = g.db.ExecContext(ctx, "DELETE FROM chunks WHERE hash = ?", hash)
+	_, err = g.db.ExecContext(ctx, "DELETE FROM chunks WHERE hash = ?", hash[:])
 	if err != nil {
 		return err
 	}
@@ -91,7 +91,7 @@ func (g *GcasImpl) FreeSpace(ctx context.Context) (int64, error) {
 // Get implements [CAS].
 func (g *GcasImpl) Get(ctx context.Context, hash Hash) ([]byte, error) {
 	var nodeID string
-	err := g.db.QueryRowContext(ctx, "SELECT node_id FROM chunks WHERE hash = ?", hash).Scan(&nodeID)
+	err := g.db.QueryRowContext(ctx, "SELECT node_id FROM chunks WHERE hash = ?", hash[:]).Scan(&nodeID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, HashNotFoundError{}
@@ -162,7 +162,7 @@ func (g *GcasImpl) Put(ctx context.Context, hash Hash, data []byte) error {
 		return err
 	}
 
-	_, err = g.db.ExecContext(ctx, "INSERT INTO chunks (hash, size, node_id) VALUES (?, ?, ?)", hash, len(data), nodeID)
+	_, err = g.db.ExecContext(ctx, "INSERT INTO chunks (hash, size, node_id) VALUES (?, ?, ?)", hash[:], len(data), nodeID)
 	return err
 }
 
