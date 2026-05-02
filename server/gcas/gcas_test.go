@@ -76,6 +76,23 @@ func TestGCASDoublePut(t *testing.T) {
 	}
 }
 
+func TestGCASNoNodes(t *testing.T) {
+	gcas, db, err := createTestGCAS(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// try to put when there are no nodes
+	// it should error
+	data := []byte("hello")
+	dataHash := sha256.Sum256(data)
+	err = gcas.Put(context.Background(), dataHash, data)
+	if !errors.Is(err, ErrNoNodes{}) {
+		t.Errorf("expected ErrNoNodes, got %v", err)
+	}
+}
+
 func createTestGCAS(numNodes int) (GCAS, *sql.DB, error) {
 	db, err := OpenDB(":memory:")
 	gcas := NewGCAS(db)
