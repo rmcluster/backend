@@ -6,15 +6,17 @@ import (
 	"sync"
 )
 
-func NewMockCAS() CAS {
+func NewMockCAS(name string) *mockCAS {
 	return &mockCAS{
 		data: make(map[Hash][]byte),
+		name: name,
 	}
 }
 
 type mockCAS struct {
 	mu   sync.RWMutex
 	data map[Hash][]byte
+	name string
 }
 
 // Delete implements [CAS].
@@ -80,7 +82,12 @@ func (m *mockCAS) Put(ctx context.Context, hash Hash, data []byte) error {
 	return nil
 }
 
-var _ CAS = (*mockCAS)(nil)
+// Name implements [NamedCAS].
+func (m *mockCAS) Name() string {
+	return m.name
+}
+
+var _ NamedCAS = (*mockCAS)(nil)
 
 // validateHash checks if the hash is the correct SHA256 hash of the data.
 func validateHash(h Hash, data []byte) bool {

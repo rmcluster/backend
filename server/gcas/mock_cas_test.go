@@ -9,7 +9,7 @@ import (
 )
 
 func TestMockCASGetPut(t *testing.T) {
-	cas := NewMockCAS()
+	cas := NewMockCAS("test")
 	ctx := context.Background()
 
 	// test data
@@ -44,7 +44,7 @@ func TestMockCASGetPut(t *testing.T) {
 
 // test deletion of CAS entry
 func TestMockCASDelete(t *testing.T) {
-	cas := NewMockCAS()
+	cas := NewMockCAS("test")
 	ctx := context.Background()
 
 	// test data
@@ -83,7 +83,7 @@ func TestMockCASDelete(t *testing.T) {
 }
 
 func TestMockCASList(t *testing.T) {
-	cas := NewMockCAS()
+	cas := NewMockCAS("test")
 	ctx := context.Background()
 
 	// list should not return anything for empty CAS
