@@ -57,6 +57,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to open GCAS database: %v", err)
 	}
+	defer func() {
+		if err := gcasdb.Close(); err != nil {
+			log.Printf("Failed to close GCAS database: %v", err)
+		}
+	}()
 
 	scheduler := scheduling.NewPartitioningScheduler(scheduling.NewInstanceFactory(&ramalama, 49170), 3)
 	tracker.DefaultTracker.Subscribe(schedulersubscriber.NewSchedulerSubscriber(scheduler))
