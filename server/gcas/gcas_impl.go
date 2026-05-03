@@ -191,6 +191,9 @@ func (g *GcasImpl) List(ctx context.Context) (<-chan Hash, error) {
 
 // Put implements [CAS].
 func (g *GcasImpl) Put(ctx context.Context, hash Hash, data []byte) error {
+	g.shardedLocker.Lock(hash)
+	defer g.shardedLocker.Unlock(hash)
+
 	// pick a random node to store the chunk
 	// note: golang internally randomizes the starting point of map iteration,
 	// however this is not guaranteed and not meant to be relied upon.
