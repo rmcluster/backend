@@ -93,6 +93,23 @@ func TestGCASNoNodes(t *testing.T) {
 	}
 }
 
+func TestGCASFreeSpaceWithoutNodes(t *testing.T) {
+	gcas, db, err := createTestGCAS(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// Without nodes there is no free space
+	freeSpace, err := gcas.FreeSpace(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if freeSpace != 0 {
+		t.Errorf("expected 0 free space, got %d", freeSpace)
+	}
+}
+
 func createTestGCAS(numNodes int) (GCAS, *sql.DB, error) {
 	db, err := OpenDB(":memory:")
 	gcas := NewGCAS(db)
