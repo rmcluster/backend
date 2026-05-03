@@ -89,28 +89,25 @@ func (g *GcasImpl) FreeSpace(ctx context.Context) (int64, error) {
 	// sum up free space of all connected nodes
 	var sum int64
 	errs := []error{}
-	var count int
 	type sumResult struct {
 		free int64
 		err  error
 	}
 	resultChan := make(chan sumResult)
 
-	go func() {
-		g.nodesLock.RLock()
-		defer g.nodesLock.RUnlock()
-		count = len(g.nodes)
-		for _, node := range g.nodes {
-			// note: since Go 1.22 for loops bind per iteration
-			go func() {
-				free, err := node.FreeSpace(ctx)
-				resultChan <- sumResult{
-					free: free,
-					err:  err,
-				}
-			}()
-		}
-	}()
+	g.nodesLock.RLock()
+	count := len(g.nodes)
+	for _, node := range g.nodes {
+		// note: since Go 1.22 for loops bind per iteration
+		go func() {
+			free, err := node.FreeSpace(ctx)
+			resultChan <- sumResult{
+				free: free,
+				err:  err,
+			}
+		}()
+	}
+	g.nodesLock.RUnlock()
 
 	for i := 0; i < count; i++ {
 		res := <-resultChan
