@@ -3,6 +3,7 @@ package gcas
 import (
 	"database/sql"
 	"embed"
+	"errors"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/sqlite"
@@ -50,7 +51,7 @@ func OpenDBWithVersion(dbPath string, version uint) (*sql.DB, error) {
 		return nil, err
 	}
 
-	if err = migrator.Migrate(version); err != nil {
+	if err = migrator.Migrate(version); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return nil, err
 	}
 
