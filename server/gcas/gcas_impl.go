@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"math/rand"
 	"sync"
 )
@@ -79,18 +78,45 @@ func (g *GcasImpl) Delete(ctx context.Context, hash Hash) error {
 
 // FreeSpace implements [CAS].
 func (g *GcasImpl) FreeSpace(ctx context.Context) (int64, error) {
-	g.nodesLock.RLock()
-	defer g.nodesLock.RUnlock()
-
 	// sum up free space of all connected nodes
 	var sum int64
-	for nodeID, node := range g.nodes {
-		free, err := node.FreeSpace(ctx)
-		if err != nil {
-			return 0, fmt.Errorf("failed to get free space from node %s: %w", nodeID, err)
-		}
-		sum += free
+	errs := []error{}
+	var count int
+	type sumResult struct {
+		free int64
+		err  error
 	}
+	resultChan := make(chan sumResult)
+
+	go func() {
+		g.nodesLock.RLock()
+		defer g.nodesLock.RUnlock()
+		count = len(g.nodes)
+		for _, node := range g.nodes {
+			// note: since Go 1.22 for loops bind per iteration
+			go func() {
+				free, err := node.FreeSpace(ctx)
+				resultChan <- sumResult{
+					free: free,
+					err:  err,
+				}
+			}()
+		}
+	}()
+
+	for i := 0; i < count; i++ {
+		res := <-resultChan
+		if res.err != nil {
+			errs = append(errs, res.err)
+		} else {
+			sum += res.free
+		}
+	}
+
+	if len(errs) > 0 {
+		return sum, errors.Join(errs...)
+	}
+
 	return sum, nil
 }
 
