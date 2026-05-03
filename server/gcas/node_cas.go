@@ -10,8 +10,9 @@ import (
 	"net/http"
 )
 
-func newRemoteCAS(ip string, port int) CAS {
+func newRemoteCAS(name string, ip string, port int) NamedCAS {
 	return &remoteCAS{
+		name:   name,
 		ip:     ip,
 		port:   port,
 		client: &http.Client{},
@@ -19,9 +20,15 @@ func newRemoteCAS(ip string, port int) CAS {
 }
 
 type remoteCAS struct {
+	name   string
 	ip     string
 	port   int
 	client *http.Client
+}
+
+// Name implements [NamedCAS].
+func (n *remoteCAS) Name() string {
+	return n.name
 }
 
 func (n *remoteCAS) url(path string) string {
@@ -164,4 +171,4 @@ func (n *remoteCAS) Put(ctx context.Context, hash Hash, data []byte) error {
 	return nil
 }
 
-var _ CAS = (*remoteCAS)(nil)
+var _ NamedCAS = (*remoteCAS)(nil)
