@@ -141,7 +141,10 @@ func (g *GcasImpl) Get(ctx context.Context, hash Hash) ([]byte, error) {
 		return nil, err
 	}
 
-	if cas, ok := g.nodes[nodeID]; ok {
+	g.nodesLock.RLock()
+	cas, ok := g.nodes[nodeID]
+	g.nodesLock.RUnlock()
+	if ok {
 		return cas.Get(ctx, hash)
 	}
 
