@@ -12,15 +12,19 @@ import (
 // NewGCAS creates a new GCAS instance.
 // db is the database connection to use for storing metadata
 func NewGCAS(db *sql.DB) GCAS {
-	gcas := NewGcasImpl(db)
-	return gcas
+	return &GcasImpl{
+		db:            db,
+		nodes:         make(map[string]CAS),
+		shardedLocker: newShardedLocker(),
+	}
 }
 
 type GcasImpl struct {
 	db *sql.DB
 	// nodes connected to the cluster
-	nodesLock sync.RWMutex
-	nodes     map[string]CAS
+	nodesLock     sync.RWMutex
+	nodes         map[string]CAS
+	shardedLocker *shardedLocker
 }
 
 // AddNode implements [GCAS].
@@ -37,15 +41,11 @@ func (g *GcasImpl) RemoveNode(nodeName string) {
 	delete(g.nodes, nodeName)
 }
 
-func NewGcasImpl(db *sql.DB) *GcasImpl {
-	return &GcasImpl{
-		db:    db,
-		nodes: make(map[string]CAS),
-	}
-}
-
 // Delete implements [CAS].
 func (g *GcasImpl) Delete(ctx context.Context, hash Hash) error {
+	g.shardedLocker.Lock(hash)
+	defer g.shardedLocker.Unlock(hash)
+
 	// which node has the chunk?
 	// query chunks table in database
 	var nodeID string
@@ -58,6 +58,9 @@ func (g *GcasImpl) Delete(ctx context.Context, hash Hash) error {
 	}
 
 	// if the node is currently connected, call Delete on the node's CAS
+	g.nodesLock.RLock()
+	defer g.nodesLock.RUnlock()
+
 	if cas, ok := g.nodes[nodeID]; ok {
 		err = cas.Delete(ctx, hash)
 		// if delete failed for any reason other than HashNotFoundError, propagate without touching the database
@@ -76,6 +79,9 @@ func (g *GcasImpl) Delete(ctx context.Context, hash Hash) error {
 
 // FreeSpace implements [CAS].
 func (g *GcasImpl) FreeSpace(ctx context.Context) (int64, error) {
+	g.nodesLock.RLock()
+	defer g.nodesLock.RUnlock()
+
 	// sum up free space of all connected nodes
 	var sum int64
 	for nodeID, node := range g.nodes {
@@ -90,6 +96,9 @@ func (g *GcasImpl) FreeSpace(ctx context.Context) (int64, error) {
 
 // Get implements [CAS].
 func (g *GcasImpl) Get(ctx context.Context, hash Hash) ([]byte, error) {
+	g.shardedLocker.RLock(hash)
+	defer g.shardedLocker.RUnlock(hash)
+
 	var nodeID string
 	err := g.db.QueryRowContext(ctx, "SELECT node_id FROM chunks WHERE hash = ?", hash[:]).Scan(&nodeID)
 	if err != nil {
@@ -111,9 +120,19 @@ func (g *GcasImpl) Get(ctx context.Context, hash Hash) ([]byte, error) {
 func (g *GcasImpl) List(ctx context.Context) (<-chan Hash, error) {
 	visited := make(map[Hash]struct{})
 	ch := make(chan Hash)
+	// the list of nodes might change while we are iterating over it.
+	// holding the lock while iterating could result in a deadlock if the channel is not drained.
+	// thus we copy the list of nodes first, accepting that the list might not be up to date.
+	g.nodesLock.RLock()
+	nodes := make([]CAS, 0, len(g.nodes))
+	for _, node := range g.nodes {
+		nodes = append(nodes, node)
+	}
+	g.nodesLock.RUnlock()
+
 	go func() {
 		defer close(ch)
-		for _, node := range g.nodes {
+		for _, node := range nodes {
 			hashes, err := node.List(ctx)
 			if err != nil {
 				return
