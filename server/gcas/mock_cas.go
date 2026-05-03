@@ -40,7 +40,7 @@ func (m *mockCAS) Get(ctx context.Context, hash Hash) ([]byte, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	// retreive data from CAS
+	// retrieve data from CAS
 	data, ok := m.data[hash]
 
 	// if data is not found, return HashNotFoundError
