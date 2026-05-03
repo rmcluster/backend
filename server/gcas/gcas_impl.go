@@ -196,8 +196,6 @@ func (g *GcasImpl) Put(ctx context.Context, hash Hash, data []byte) error {
 	// note: golang internally randomizes the starting point of map iteration,
 	// however this is not guaranteed and not meant to be relied upon.
 
-	var nodes []string
-
 	// check if the chunk already exists
 	{
 		var nodeID string
@@ -212,27 +210,35 @@ func (g *GcasImpl) Put(ctx context.Context, hash Hash, data []byte) error {
 		}
 	}
 
-	g.nodesLock.RLock()
-	defer g.nodesLock.RUnlock()
-	for id := range g.nodes {
-		nodes = append(nodes, id)
+	type nodePair struct {
+		id  string
+		cas CAS
 	}
+
+	g.nodesLock.RLock()
+	nodes := make([]nodePair, 0, len(g.nodes))
+	for id := range g.nodes {
+		nodes = append(nodes, nodePair{
+			id:  id,
+			cas: g.nodes[id],
+		})
+	}
+	g.nodesLock.RUnlock()
 
 	if len(nodes) == 0 {
 		return ErrNoNodes{}
 	}
 
 	idx := rand.Intn(len(nodes))
-	nodeID := nodes[idx]
+	node := nodes[idx]
 
-	cas := g.nodes[nodeID]
-	err := cas.Put(ctx, hash, data)
+	err := node.cas.Put(ctx, hash, data)
 
 	if err != nil {
 		return err
 	}
 
-	_, err = g.db.ExecContext(ctx, "INSERT INTO chunks (hash, size, node_id) VALUES (?, ?, ?)", hash[:], len(data), nodeID)
+	_, err = g.db.ExecContext(ctx, "INSERT INTO chunks (hash, size, node_id) VALUES (?, ?, ?)", hash[:], len(data), node.id)
 	return err
 }
 
