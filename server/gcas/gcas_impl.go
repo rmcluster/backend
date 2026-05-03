@@ -26,6 +26,13 @@ type GcasImpl struct {
 	shardedLocker *shardedLocker
 }
 
+// ReplaceNode implements [GCAS].
+func (g *GcasImpl) ReplaceNode(node NamedCAS) {
+	g.nodesLock.Lock()
+	defer g.nodesLock.Unlock()
+	g.nodes[node.Name()] = node
+}
+
 // AddNode implements [GCAS].
 func (g *GcasImpl) AddNode(node NamedCAS) {
 	g.nodesLock.Lock()

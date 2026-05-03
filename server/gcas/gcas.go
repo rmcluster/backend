@@ -7,6 +7,7 @@ type GCAS interface {
 	CAS
 	AddNode(node NamedCAS)
 	RemoveNode(nodeName string)
+	ReplaceNode(node NamedCAS) // replaces the node with the same name with the new node
 }
 
 type NamedCAS interface {
