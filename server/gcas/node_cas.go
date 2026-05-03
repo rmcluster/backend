@@ -10,7 +10,7 @@ import (
 	"net/http"
 )
 
-func newRemoteCAS(name string, ip string, port int) NamedCAS {
+func NewRemoteCAS(name string, ip string, port int) NamedCAS {
 	return &remoteCAS{
 		name:   name,
 		ip:     ip,
