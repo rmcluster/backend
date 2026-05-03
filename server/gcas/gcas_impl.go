@@ -65,9 +65,10 @@ func (g *GcasImpl) Delete(ctx context.Context, hash Hash) error {
 
 	// if the node is currently connected, call Delete on the node's CAS
 	g.nodesLock.RLock()
-	defer g.nodesLock.RUnlock()
+	cas, ok := g.nodes[nodeID]
+	g.nodesLock.RUnlock()
 
-	if cas, ok := g.nodes[nodeID]; ok {
+	if ok {
 		err = cas.Delete(ctx, hash)
 		// if delete failed for any reason other than HashNotFoundError, propagate without touching the database
 		if err != nil && !errors.Is(err, HashNotFoundError{}) {
