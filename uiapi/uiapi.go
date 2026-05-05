@@ -21,6 +21,8 @@ type UIApi struct {
 	connectTokens  map[string]time.Time
 	deviceLock     sync.Mutex
 	deviceRegistry map[string]registeredDevice
+	chatLock       sync.Mutex
+	chatSessions   map[string]chatSessionRecord
 }
 
 type registeredDevice struct {
@@ -39,12 +41,12 @@ var (
 
 func New(tracker *tracker.Tracker, llama llama.Llama) *UIApi {
 	initHFMetadataStoreFromEnv()
-	return &UIApi{tracker: tracker, llama: llama}
 	return &UIApi{
 		tracker:        tracker,
 		llama:          llama,
 		connectTokens:  make(map[string]time.Time),
 		deviceRegistry: make(map[string]registeredDevice),
+		chatSessions:   make(map[string]chatSessionRecord),
 	}
 }
 
@@ -84,6 +86,8 @@ func (s *UIApi) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ui/models/local", s.handleAPILocalModelUpload)
 	mux.HandleFunc("/api/ui/dashboard", s.handleAPIDashboard)
 	mux.HandleFunc("/api/ui/connect-info", s.handleAPIConnectInfo)
+	mux.HandleFunc("/api/ui/chats", s.handleAPIStartChat)
+	mux.HandleFunc("/api/ui/chats/", s.handleAPIChatRoute)
 	mux.HandleFunc("/api/v1/devices/register", s.handleAPIDeviceRegister)
 	mux.HandleFunc("/api/v1/devices/", s.handleAPIDeviceAction)
 }

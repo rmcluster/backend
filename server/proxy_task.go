@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -25,6 +26,13 @@ func newProxyTask(model string, w http.ResponseWriter, r *http.Request) *proxyTa
 // Model implements [scheduling.Task].
 func (p *proxyTask) Model() string {
 	return p.model
+}
+
+// Fail writes a 503 error response so the waiting HTTP handler can unblock.
+func (p *proxyTask) Fail(err error) {
+	p.w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	p.w.WriteHeader(http.StatusServiceUnavailable)
+	_ = json.NewEncoder(p.w).Encode(map[string]string{"error": err.Error()})
 }
 
 // PerformInference implements [scheduling.Task].

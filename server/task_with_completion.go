@@ -15,8 +15,15 @@ func (t *taskWithCompletion) Model() string {
 // PerformInference implements [scheduling.Task].
 func (t *taskWithCompletion) PerformInference(instance scheduling.Instance) error {
 	defer close(t.done)
-
 	return t.inner.PerformInference(instance)
+}
+
+// Fail signals the waiting handler that no instance could be started.
+func (t *taskWithCompletion) Fail(err error) {
+	defer close(t.done)
+	if f, ok := t.inner.(interface{ Fail(error) }); ok {
+		f.Fail(err)
+	}
 }
 
 func newTaskWithCompletion(task scheduling.Task) *taskWithCompletion {
