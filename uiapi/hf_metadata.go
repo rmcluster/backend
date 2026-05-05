@@ -54,8 +54,12 @@ func parseHFModelRef(name string) (repo string, variant string, ok bool) {
 	return repo, variant, true
 }
 
+// hfMetadataCacheVersion is bumped whenever the hfMetadata struct gains new
+// fields, so stale BoltDB entries are ignored rather than returning zero values.
+const hfMetadataCacheVersion = "v2:"
+
 func fetchHFMetadata(repo string, variant string) hfMetadata {
-	key := repo + "::" + variant
+	key := hfMetadataCacheVersion + repo + "::" + variant
 
 	hfCacheMu.RLock()
 	if cached, ok := hfCache[key]; ok {
@@ -114,6 +118,15 @@ func fetchHFMetadata(repo string, variant string) hfMetadata {
 	)
 
 	meta.SupportsThinking = chatTemplateContainsThink(payload.Config)
+	// GGUF repos rarely include tokenizer_config. If we didn't find a <think>
+	// template here, try the upstream base model repo.
+	if !meta.SupportsThinking {
+		if baseRepo := extractBaseModelRepo(payload.Tags); baseRepo != "" && baseRepo != repo {
+			if baseMeta := fetchHFMetadata(baseRepo, ""); baseMeta.SupportsThinking {
+				meta.SupportsThinking = true
+			}
+		}
+	}
 
 	if meta.Parameters == "" {
 		meta.Parameters = "-"
@@ -134,7 +147,7 @@ func fetchHFMetadata(repo string, variant string) hfMetadata {
 
 func cacheHFMetadata(repo string, variant string, meta hfMetadata) {
 	hfCacheMu.Lock()
-	hfCache[repo+"::"+variant] = meta
+	hfCache[hfMetadataCacheVersion+repo+"::"+variant] = meta
 	hfCacheMu.Unlock()
 }
 
@@ -249,6 +262,24 @@ func extractQuantFromVariant(variant string) string {
 	}
 	if match := quantTagRe.FindString(variant); match != "" {
 		return strings.ToUpper(match)
+	}
+	return ""
+}
+
+// extractBaseModelRepo returns the first "owner/repo" found in base_model tags,
+// stripping the "quantized:" qualifier if present. Returns "" if none found.
+func extractBaseModelRepo(tags []string) string {
+	for _, tag := range tags {
+		val, ok := strings.CutPrefix(tag, "base_model:")
+		if !ok {
+			continue
+		}
+		// skip "base_model:quantized:owner/repo" qualifier prefix
+		val, _ = strings.CutPrefix(val, "quantized:")
+		val = strings.TrimSpace(val)
+		if strings.Contains(val, "/") {
+			return val
+		}
 	}
 	return ""
 }
