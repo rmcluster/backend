@@ -14,9 +14,11 @@ import (
 	"github.com/wk-y/rama-swap/microservices/dashboard"
 	"github.com/wk-y/rama-swap/microservices/homepage"
 	"github.com/wk-y/rama-swap/microservices/scheduling"
+	"github.com/wk-y/rama-swap/microservices/webdavservice"
 	"github.com/wk-y/rama-swap/server"
 	"github.com/wk-y/rama-swap/server/openapi"
 	schedulersubscriber "github.com/wk-y/rama-swap/server/scheduler_subscriber"
+	"github.com/wk-y/rama-swap/server/storage"
 	"github.com/wk-y/rama-swap/tracker"
 )
 
@@ -53,6 +55,8 @@ func main() {
 	dashboard.RegisterHandlers(mux)
 	homepage := homepage.NewHomepage()
 	homepage.RegisterHandlers(mux)
+	webdavService := webdavservice.NewWebDavService(storage.NewStorageService(cas))
+	webdavService.RegisterGinHandlers(router)
 
 	server.ModelNameMangler = func(s string) string {
 		return strings.ReplaceAll(s, "/", "_")
