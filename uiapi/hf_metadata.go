@@ -11,9 +11,10 @@ import (
 )
 
 type hfMetadata struct {
-	Parameters   string
-	Architecture string
-	Quantization string
+	Parameters       string
+	Architecture     string
+	Quantization     string
+	SupportsThinking bool
 }
 
 type hfModelResponse struct {
@@ -111,6 +112,8 @@ func fetchHFMetadata(repo string, variant string) hfMetadata {
 		readQuantFromTags(payload.Tags),
 		extractQuantFromVariant(variant),
 	)
+
+	meta.SupportsThinking = chatTemplateContainsThink(payload.Config)
 
 	if meta.Parameters == "" {
 		meta.Parameters = "-"
@@ -248,6 +251,20 @@ func extractQuantFromVariant(variant string) string {
 		return strings.ToUpper(match)
 	}
 	return ""
+}
+
+// chatTemplateContainsThink returns true when the HF model config includes a
+// tokenizer chat_template that uses <think> blocks (e.g. Qwen3, DeepSeek-R1).
+func chatTemplateContainsThink(config map[string]any) bool {
+	if config == nil {
+		return false
+	}
+	tc, ok := config["tokenizer_config"].(map[string]any)
+	if !ok {
+		return false
+	}
+	template, _ := tc["chat_template"].(string)
+	return strings.Contains(template, "<think>")
 }
 
 func firstNonEmpty(values ...string) string {

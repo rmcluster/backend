@@ -20,14 +20,15 @@ import (
 // ---- API types ----
 
 type apiModel struct {
-	Model        string `json:"model"`
-	DisplayName  string `json:"display_name"`
-	Parameters   string `json:"parameters,omitempty"`
-	Architecture string `json:"architecture,omitempty"`
-	Quantization string `json:"quantization,omitempty"`
-	Source       string `json:"source"`
-	LinkHref     string `json:"link_href"`
-	LinkLabel    string `json:"link_label"`
+	Model            string `json:"model"`
+	DisplayName      string `json:"display_name"`
+	Parameters       string `json:"parameters,omitempty"`
+	Architecture     string `json:"architecture,omitempty"`
+	Quantization     string `json:"quantization,omitempty"`
+	Source           string `json:"source"`
+	LinkHref         string `json:"link_href"`
+	LinkLabel        string `json:"link_label"`
+	SupportsThinking bool   `json:"supports_thinking"`
 }
 
 type apiModelsResponse struct {
@@ -516,15 +517,23 @@ func (s *UIApi) handleAPIModels(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		supportsThinking := false
+		if strings.HasPrefix(entry.Model, "hf:") {
+			if repo, variant, ok := parseHFModelRef(entry.Model); ok {
+				supportsThinking = fetchHFMetadata(repo, variant).SupportsThinking
+			}
+		}
+
 		models = append(models, apiModel{
-			Model:        entry.Model,
-			DisplayName:  entry.DisplayName,
-			Parameters:   params,
-			Architecture: arch,
-			Quantization: quant,
-			Source:       entry.Source,
-			LinkHref:     entry.LinkHref,
-			LinkLabel:    entry.LinkLabel,
+			Model:            entry.Model,
+			DisplayName:      entry.DisplayName,
+			Parameters:       params,
+			Architecture:     arch,
+			Quantization:     quant,
+			Source:           entry.Source,
+			LinkHref:         entry.LinkHref,
+			LinkLabel:        entry.LinkLabel,
+			SupportsThinking: supportsThinking,
 		})
 	}
 

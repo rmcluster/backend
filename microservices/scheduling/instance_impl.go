@@ -63,7 +63,11 @@ func (i *instanceImpl) ReverseProxy() *httputil.ReverseProxy {
 		panic(err)
 	}
 
-	return httputil.NewSingleHostReverseProxy(baseUrl)
+	proxy := httputil.NewSingleHostReverseProxy(baseUrl)
+	// Flush immediately after every write so SSE tokens reach the client in real-time
+	// instead of being buffered until the stream ends.
+	proxy.FlushInterval = -1
+	return proxy
 }
 
 // AwaitTermination implements [Instance].

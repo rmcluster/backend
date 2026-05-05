@@ -5,6 +5,8 @@ import (
 	"context"
 	"log"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -24,11 +26,11 @@ type instanceFactoryImpl struct {
 	llmService    *llama.Llama
 	lowestPort    int              // the lowest port to use
 	usedPorts     map[int]struct{} // ports that are currently in use
-	phaseCallback func(model, phase string)
+	phaseCallback func(model, phase string, progress float64)
 }
 
 // SetPhaseCallback implements [PhaseCallbackSetter].
-func (i *instanceFactoryImpl) SetPhaseCallback(cb func(model, phase string)) {
+func (i *instanceFactoryImpl) SetPhaseCallback(cb func(model, phase string, progress float64)) {
 	i.Lock()
 	defer i.Unlock()
 	i.phaseCallback = cb
@@ -148,8 +150,14 @@ func newProcessLogWriter(model string, stream string, onLine func(string)) *proc
 	return &processLogWriter{model: model, stream: stream, onLine: onLine}
 }
 
+// reProgressPct matches llama.cpp download progress lines, e.g. "45.2% (123456 / 272060416 bytes)"
+var reProgressPct = regexp.MustCompile(`(\d+(?:\.\d+)?)%`)
+
 func (w *processLogWriter) Write(p []byte) (int, error) {
-	w.buffer.Write(p)
+	// Treat \r as a line terminator so llama.cpp in-place progress updates are
+	// each dispatched as individual lines rather than accumulated silently.
+	normalised := bytes.ReplaceAll(p, []byte{'\r'}, []byte{'\n'})
+	w.buffer.Write(normalised)
 	for {
 		line, err := w.buffer.ReadString('\n')
 		if err == bytes.ErrTooLarge {
@@ -169,8 +177,7 @@ func (w *processLogWriter) Write(p []byte) (int, error) {
 			w.buffer.Reset()
 			break
 		}
-		line = strings.TrimRight(line, "\n")
-		line = strings.TrimRight(line, "\r")
+		line = strings.TrimRight(line, "\n\r")
 		if line != "" {
 			log.Printf("[llama %s %s] %s", w.model, w.stream, line)
 			if w.onLine != nil {
@@ -183,23 +190,25 @@ func (w *processLogWriter) Write(p []byte) (int, error) {
 
 // makePhaseDetector returns an onLine hook that calls cb whenever a known
 // loading phase is detected in a llama-server stderr line.
-func makePhaseDetector(model string, cb func(model, phase string)) func(string) {
+func makePhaseDetector(model string, cb func(model, phase string, progress float64)) func(string) {
 	if cb == nil {
 		return nil
 	}
 	return func(line string) {
-		var phase string
 		switch {
 		case strings.Contains(line, ": downloading from "):
-			phase = PhaseDownloading
+			cb(model, PhaseDownloading, 0)
+		case strings.Contains(line, "downloading") && strings.Contains(line, "%"):
+			var pct float64
+			if m := reProgressPct.FindStringSubmatch(line); m != nil {
+				pct, _ = strconv.ParseFloat(m[1], 64)
+			}
+			cb(model, PhaseDownloading, pct)
 		case strings.Contains(line, "load_model: loading model"),
 			strings.Contains(line, "main: loading model"):
-			phase = PhaseLoading
+			cb(model, PhaseLoading, 0)
 		case strings.Contains(line, "warming up"):
-			phase = PhaseWarmingUp
-		}
-		if phase != "" {
-			cb(model, phase)
+			cb(model, PhaseWarmingUp, 0)
 		}
 	}
 }
