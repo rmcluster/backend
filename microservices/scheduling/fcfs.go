@@ -24,6 +24,7 @@ type FcfsScheduler struct {
 	activeModel  string
 	activeInst   Instance
 	runningTasks int
+	loadingPhase string // set while state == stateStarting
 }
 
 // NewFcfsScheduler creates a new FcfsScheduler.
@@ -154,7 +155,32 @@ func (f *FcfsScheduler) pump() {
 	}
 }
 
+// GetLoadingStatus implements [LoadingStatusProvider].
+func (f *FcfsScheduler) GetLoadingStatus() (model, phase string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.state != stateStarting {
+		return "", ""
+	}
+	return f.activeModel, f.loadingPhase
+}
+
 func (f *FcfsScheduler) startInstance(model string, nodes []Node) {
+	// Mark initial phase and register a callback so stderr lines update it.
+	f.mu.Lock()
+	f.loadingPhase = PhaseStarting
+	f.mu.Unlock()
+
+	if setter, ok := f.factory.(PhaseCallbackSetter); ok {
+		setter.SetPhaseCallback(func(m, phase string) {
+			f.mu.Lock()
+			if f.activeModel == m {
+				f.loadingPhase = phase
+			}
+			f.mu.Unlock()
+		})
+	}
+
 	var err error
 
 	// refuse to start if no nodes are available
@@ -178,6 +204,7 @@ func (f *FcfsScheduler) startInstance(model string, nodes []Node) {
 	if err != nil {
 		log.Printf("FcfsScheduler: Failed to start instance for model %s: %v", model, err)
 		f.state = stateIdle
+		f.loadingPhase = ""
 		// Drop the failing task to prevent an infinite retry loop, and notify
 		// the waiting handler so its HTTP request doesn't hang forever.
 		if len(f.queue) > 0 && f.queue[0].Model() == model {
@@ -192,6 +219,7 @@ func (f *FcfsScheduler) startInstance(model string, nodes []Node) {
 		}
 	} else {
 		f.state = stateRunning
+		f.loadingPhase = ""
 		f.activeInst = instance
 		go func(inst Instance) {
 			inst.AwaitTermination()

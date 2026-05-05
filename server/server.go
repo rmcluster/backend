@@ -39,6 +39,9 @@ func (s *Server) HandleHttp(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
 	mux.HandleFunc("POST /v1/completions", s.handleCompletions)
 
+	// Loading status (polled by the frontend while a model is starting up)
+	mux.HandleFunc("GET /api/ui/loading-status", s.handleLoadingStatus)
+
 	// llama-swap style endpoint
 	mux.HandleFunc("/upstream/{model}/{rest...}", s.serveUpstream)
 	mux.HandleFunc("/upstream/{$}", s.serveUpstreamSelect)
@@ -107,6 +110,24 @@ func (s *Server) handleCompletions(w http.ResponseWriter, r *http.Request) {
 
 		return *modelGet.Model, nil
 	})
+}
+
+func (s *Server) handleLoadingStatus(w http.ResponseWriter, r *http.Request) {
+	type response struct {
+		Model string `json:"model"`
+		Phase string `json:"phase"`
+	}
+
+	var resp response
+	type statusProvider interface {
+		GetLoadingStatus() (model, phase string)
+	}
+	if p, ok := s.scheduler.(statusProvider); ok {
+		resp.Model, resp.Phase = p.GetLoadingStatus()
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
