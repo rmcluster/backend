@@ -34,6 +34,14 @@ func corsMiddleware(handler http.Handler) http.Handler {
 	})
 }
 
+// requestLogger logs every incoming request method and path.
+func requestLogger(handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("%s %s", r.Method, r.URL.Path)
+		handler.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	mux := http.NewServeMux()
 
@@ -95,7 +103,7 @@ func main() {
 	defer l.Close()
 
 	server.HandleHttp(mux)
-	err = http.Serve(l, corsMiddleware(mux))
+	err = http.Serve(l, requestLogger(corsMiddleware(mux)))
 
 	log.Fatalf("Failed to serve: %v", err)
 }

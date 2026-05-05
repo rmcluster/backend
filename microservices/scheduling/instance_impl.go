@@ -39,7 +39,7 @@ func (i *instanceImpl) WaitReady() error {
 		// the check is put here to minimize the window for a race condition
 		select {
 		case _, ok := <-i.dead:
-			if ok {
+			if !ok {
 				return fmt.Errorf("instance is dead")
 			}
 		default:

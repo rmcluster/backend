@@ -1,18 +1,13 @@
 package uiapi
 
 import (
-	"encoding/json"
 	"crypto/rand"
-	"encoding/json"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
 	"mime/multipart"
-	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
 	"net"
 	"net/http"
 	"os"
@@ -21,6 +16,8 @@ import (
 	"strings"
 	"time"
 )
+
+// ---- API types ----
 
 type apiModel struct {
 	Model        string `json:"model"`
@@ -70,9 +67,11 @@ type dashboardDataResponse struct {
 }
 
 type connectInfoResponse struct {
-	Host string `json:"host"`
-	Port int    `json:"port"`
-	Token string `json:"token"`
+	Host                  string `json:"host"`
+	Port                  int    `json:"port"`
+	Token                 string `json:"token"`
+	ConnectURI            string `json:"connect_uri"`
+	TokenExpiresInSeconds int    `json:"token_expires_in_seconds"`
 }
 
 type deviceRegisterRequest struct {
@@ -83,19 +82,49 @@ type deviceRegisterRequest struct {
 	Token    string `json:"token"`
 }
 
+// ---- Chat session types ----
+
+type startChatRequest struct {
+	ChatID    string `json:"chat_id"`
+	Model     string `json:"model"`
+	StartedAt string `json:"started_at,omitempty"`
+	UserID    string `json:"user_id,omitempty"`
+}
+
+type chatEventRequest struct {
+	EventType string `json:"event_type"`
+	MessageID string `json:"message_id,omitempty"`
+	Role      string `json:"role,omitempty"`
+	Content   string `json:"content,omitempty"`
+	Token     string `json:"token,omitempty"`
+	Error     string `json:"error,omitempty"`
+	Timestamp string `json:"timestamp"`
+}
+
+type chatEvent struct {
+	chatEventRequest
+	Sequence int `json:"sequence"`
+}
+
+type chatSessionRecord struct {
+	ChatID    string      `json:"chat_id"`
+	Model     string      `json:"model"`
+	StartedAt string      `json:"started_at"`
+	Status    string      `json:"status"`
+	Events    []chatEvent `json:"events"`
+}
+
+// ---- Core handlers ----
+
 func (s *UIApi) handleAPIRoot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-
 	writeAPIJSON(w, http.StatusOK, map[string]any{
 		"models":    "/api/ui/models",
 		"search":    "/api/ui/models/search",
 		"dashboard": "/api/ui/dashboard",
-	})
-}
-
 		"connect":   "/api/ui/connect-info",
 	})
 }
@@ -113,7 +142,14 @@ func (s *UIApi) handleAPIConnectInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeAPIJSON(w, http.StatusOK, connectInfoResponse{Host: host, Port: port, Token: token})
+	connectURI := fmt.Sprintf("rmcluster://connect?url=%s&port=%d&token=%s", host, port, token)
+	writeAPIJSON(w, http.StatusOK, connectInfoResponse{
+		Host:                  host,
+		Port:                  port,
+		Token:                 token,
+		ConnectURI:            connectURI,
+		TokenExpiresInSeconds: 120,
+	})
 }
 
 func (s *UIApi) handleAPIDeviceRegister(w http.ResponseWriter, r *http.Request) {
@@ -205,11 +241,132 @@ func (s *UIApi) handleAPIDeviceAction(w http.ResponseWriter, r *http.Request) {
 	writeAPIJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
+// ---- Chat session handlers ----
+
+func (s *UIApi) handleAPIStartChat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req startChatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	if strings.TrimSpace(req.ChatID) == "" || strings.TrimSpace(req.Model) == "" {
+		writeAPIError(w, http.StatusBadRequest, "chat_id and model are required")
+		return
+	}
+
+	startedAt := req.StartedAt
+	if startedAt == "" {
+		startedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+
+	session := chatSessionRecord{
+		ChatID:    req.ChatID,
+		Model:     req.Model,
+		StartedAt: startedAt,
+		Status:    "active",
+		Events:    []chatEvent{},
+	}
+
+	s.chatLock.Lock()
+	s.chatSessions[req.ChatID] = session
+	s.chatLock.Unlock()
+
+	writeAPIJSON(w, http.StatusCreated, map[string]any{
+		"chat_id":    session.ChatID,
+		"model":      session.Model,
+		"started_at": session.StartedAt,
+		"status":     session.Status,
+	})
+}
+
+func (s *UIApi) handleAPIChatRoute(w http.ResponseWriter, r *http.Request) {
+	trimmed := strings.TrimPrefix(r.URL.Path, "/api/ui/chats/")
+	parts := strings.SplitN(strings.Trim(trimmed, "/"), "/", 2)
+
+	chatID := parts[0]
+	if chatID == "" {
+		writeAPIError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "events" {
+		if r.Method != http.MethodPost {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.appendChatEvent(w, r, chatID)
+		return
+	}
+
+	if len(parts) == 1 {
+		if r.Method != http.MethodGet {
+			writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.getChatSession(w, r, chatID)
+		return
+	}
+
+	writeAPIError(w, http.StatusNotFound, "not found")
+}
+
+func (s *UIApi) appendChatEvent(w http.ResponseWriter, r *http.Request, chatID string) {
+	var req chatEventRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	if req.EventType == "" || req.Timestamp == "" {
+		writeAPIError(w, http.StatusBadRequest, "event_type and timestamp are required")
+		return
+	}
+
+	s.chatLock.Lock()
+	session, ok := s.chatSessions[chatID]
+	if ok {
+		seq := len(session.Events) + 1
+		session.Events = append(session.Events, chatEvent{chatEventRequest: req, Sequence: seq})
+		s.chatSessions[chatID] = session
+	}
+	s.chatLock.Unlock()
+
+	if !ok {
+		writeAPIError(w, http.StatusNotFound, "chat session not found")
+		return
+	}
+
+	writeAPIJSON(w, http.StatusAccepted, map[string]any{"status": "accepted"})
+}
+
+func (s *UIApi) getChatSession(w http.ResponseWriter, r *http.Request, chatID string) {
+	s.chatLock.Lock()
+	session, ok := s.chatSessions[chatID]
+	s.chatLock.Unlock()
+
+	if !ok {
+		writeAPIError(w, http.StatusNotFound, "chat session not found")
+		return
+	}
+
+	writeAPIJSON(w, http.StatusOK, session)
+}
+
+// ---- noopResponseWriter ----
+
 type noopResponseWriter struct{}
 
-func (noopResponseWriter) Header() http.Header { return make(http.Header) }
-func (noopResponseWriter) Write([]byte) (int, error) { return 0, nil }
+func (noopResponseWriter) Header() http.Header        { return make(http.Header) }
+func (noopResponseWriter) Write([]byte) (int, error)  { return 0, nil }
 func (noopResponseWriter) WriteHeader(statusCode int) {}
+
+// ---- Token management ----
 
 func (s *UIApi) issueConnectToken() (string, error) {
 	raw := make([]byte, 16)
@@ -251,6 +408,8 @@ func (s *UIApi) consumeConnectToken(token string) bool {
 	delete(s.connectTokens, token)
 	return true
 }
+
+// ---- Network utilities ----
 
 func preferredConnectHostPort(r *http.Request) (string, int) {
 	host := strings.TrimSpace(r.Host)
@@ -325,6 +484,8 @@ func firstNonLoopbackIPv4() (string, bool) {
 
 	return "", false
 }
+
+// ---- Model handlers ----
 
 func (s *UIApi) handleAPIModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -504,6 +665,8 @@ func (s *UIApi) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {
 
 	writeAPIJSON(w, http.StatusOK, payload)
 }
+
+// ---- JSON helpers ----
 
 func writeAPIJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

@@ -178,9 +178,17 @@ func (f *FcfsScheduler) startInstance(model string, nodes []Node) {
 	if err != nil {
 		log.Printf("FcfsScheduler: Failed to start instance for model %s: %v", model, err)
 		f.state = stateIdle
-		// If the failing task is still at the front, drop it to prevent infinite loop
+		// Drop the failing task to prevent an infinite retry loop, and notify
+		// the waiting handler so its HTTP request doesn't hang forever.
 		if len(f.queue) > 0 && f.queue[0].Model() == model {
+			failedTask := f.queue[0]
 			f.queue = f.queue[1:]
+			go func(t Task, e error) {
+				type failable interface{ Fail(error) }
+				if ft, ok := t.(failable); ok {
+					ft.Fail(e)
+				}
+			}(failedTask, err)
 		}
 	} else {
 		f.state = stateRunning
