@@ -114,16 +114,17 @@ func (s *Server) handleCompletions(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleLoadingStatus(w http.ResponseWriter, r *http.Request) {
 	type response struct {
-		Model string `json:"model"`
-		Phase string `json:"phase"`
+		Model    string  `json:"model"`
+		Phase    string  `json:"phase"`
+		Progress float64 `json:"progress"` // download progress [0,100]
 	}
 
 	var resp response
 	type statusProvider interface {
-		GetLoadingStatus() (model, phase string)
+		GetLoadingStatus() (model, phase string, progress float64)
 	}
 	if p, ok := s.scheduler.(statusProvider); ok {
-		resp.Model, resp.Phase = p.GetLoadingStatus()
+		resp.Model, resp.Phase, resp.Progress = p.GetLoadingStatus()
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

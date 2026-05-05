@@ -24,7 +24,8 @@ type FcfsScheduler struct {
 	activeModel  string
 	activeInst   Instance
 	runningTasks int
-	loadingPhase string // set while state == stateStarting
+	loadingPhase    string  // set while state == stateStarting
+	loadingProgress float64 // download progress [0,100], only meaningful during PhaseDownloading
 }
 
 // NewFcfsScheduler creates a new FcfsScheduler.
@@ -156,13 +157,13 @@ func (f *FcfsScheduler) pump() {
 }
 
 // GetLoadingStatus implements [LoadingStatusProvider].
-func (f *FcfsScheduler) GetLoadingStatus() (model, phase string) {
+func (f *FcfsScheduler) GetLoadingStatus() (model, phase string, progress float64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.state != stateStarting {
-		return "", ""
+		return "", "", 0
 	}
-	return f.activeModel, f.loadingPhase
+	return f.activeModel, f.loadingPhase, f.loadingProgress
 }
 
 func (f *FcfsScheduler) startInstance(model string, nodes []Node) {
@@ -172,10 +173,11 @@ func (f *FcfsScheduler) startInstance(model string, nodes []Node) {
 	f.mu.Unlock()
 
 	if setter, ok := f.factory.(PhaseCallbackSetter); ok {
-		setter.SetPhaseCallback(func(m, phase string) {
+		setter.SetPhaseCallback(func(m, phase string, progress float64) {
 			f.mu.Lock()
 			if f.activeModel == m {
 				f.loadingPhase = phase
+				f.loadingProgress = progress
 			}
 			f.mu.Unlock()
 		})
