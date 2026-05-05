@@ -15,6 +15,7 @@ import (
 	"github.com/wk-y/rama-swap/microservices/dashboard"
 	"github.com/wk-y/rama-swap/microservices/homepage"
 	"github.com/wk-y/rama-swap/microservices/scheduling"
+	"github.com/wk-y/rama-swap/microservices/webdavservice"
 	"github.com/wk-y/rama-swap/server"
 	"github.com/wk-y/rama-swap/server/gcas"
 	gcassubscriber "github.com/wk-y/rama-swap/server/gcas_subscriber"
