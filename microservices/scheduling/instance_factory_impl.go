@@ -21,9 +21,17 @@ func NewInstanceFactory(llmService *llama.Llama, lowestPort int) InstanceFactory
 
 type instanceFactoryImpl struct {
 	sync.Mutex
-	llmService *llama.Llama
-	lowestPort int              // the lowest port to use
-	usedPorts  map[int]struct{} // ports that are currently in use
+	llmService    *llama.Llama
+	lowestPort    int              // the lowest port to use
+	usedPorts     map[int]struct{} // ports that are currently in use
+	phaseCallback func(model, phase string)
+}
+
+// SetPhaseCallback implements [PhaseCallbackSetter].
+func (i *instanceFactoryImpl) SetPhaseCallback(cb func(model, phase string)) {
+	i.Lock()
+	defer i.Unlock()
+	i.phaseCallback = cb
 }
 
 // StartInstance implements [InstanceFactory].
@@ -61,8 +69,9 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 			Port:          port,
 			OffloadLayers: &offloadLayers,
 		})
-		cmd.Stdout = newProcessLogWriter(model, "stdout")
-		cmd.Stderr = newProcessLogWriter(model, "stderr")
+		cmd.Stdout = newProcessLogWriter(model, "stdout", nil)
+		// i is already locked here — read phaseCallback directly, no re-lock
+		cmd.Stderr = newProcessLogWriter(model, "stderr", makePhaseDetector(model, i.phaseCallback))
 
 		err := cmd.Start()
 		if err != nil {
@@ -129,13 +138,14 @@ func chooseOffloadLayers(nodes []Node) int {
 }
 
 type processLogWriter struct {
-	model string
+	model  string
 	stream string
 	buffer bytes.Buffer
+	onLine func(string) // called with each complete trimmed line
 }
 
-func newProcessLogWriter(model string, stream string) *processLogWriter {
-	return &processLogWriter{model: model, stream: stream}
+func newProcessLogWriter(model string, stream string, onLine func(string)) *processLogWriter {
+	return &processLogWriter{model: model, stream: stream, onLine: onLine}
 }
 
 func (w *processLogWriter) Write(p []byte) (int, error) {
@@ -152,6 +162,9 @@ func (w *processLogWriter) Write(p []byte) (int, error) {
 			remaining := strings.TrimSpace(w.buffer.String())
 			if remaining != "" {
 				log.Printf("[llama %s %s] %s", w.model, w.stream, remaining)
+				if w.onLine != nil {
+					w.onLine(remaining)
+				}
 			}
 			w.buffer.Reset()
 			break
@@ -160,9 +173,35 @@ func (w *processLogWriter) Write(p []byte) (int, error) {
 		line = strings.TrimRight(line, "\r")
 		if line != "" {
 			log.Printf("[llama %s %s] %s", w.model, w.stream, line)
+			if w.onLine != nil {
+				w.onLine(line)
+			}
 		}
 	}
 	return len(p), nil
+}
+
+// makePhaseDetector returns an onLine hook that calls cb whenever a known
+// loading phase is detected in a llama-server stderr line.
+func makePhaseDetector(model string, cb func(model, phase string)) func(string) {
+	if cb == nil {
+		return nil
+	}
+	return func(line string) {
+		var phase string
+		switch {
+		case strings.Contains(line, ": downloading from "):
+			phase = PhaseDownloading
+		case strings.Contains(line, "load_model: loading model"),
+			strings.Contains(line, "main: loading model"):
+			phase = PhaseLoading
+		case strings.Contains(line, "warming up"):
+			phase = PhaseWarmingUp
+		}
+		if phase != "" {
+			cb(model, phase)
+		}
+	}
 }
 
 var _ InstanceFactory = (*instanceFactoryImpl)(nil)
