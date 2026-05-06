@@ -18,17 +18,19 @@ type Server struct {
 	ModelNameMangler func(string) string
 	BasePort         int // starting port number to use for underlying instances
 
-	ramalama  llama.Llama
-	scheduler scheduling.Scheduler
+	ramalama      llama.Llama
+	scheduler     scheduling.Scheduler
+	loadingStatus scheduling.LoadingStatusProvider // may be nil
 
 	demangleCacheLock sync.RWMutex
 	demangleCache     map[string]string
 }
 
-func NewServer(r llama.Llama, scheduler scheduling.Scheduler) *Server {
+func NewServer(r llama.Llama, scheduler scheduling.Scheduler, loadingStatus scheduling.LoadingStatusProvider) *Server {
 	return &Server{
 		ramalama:      r,
 		scheduler:     scheduler,
+		loadingStatus: loadingStatus,
 		demangleCache: map[string]string{},
 	}
 }
@@ -125,11 +127,15 @@ func (s *Server) handleLoadingStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var resp response
-	type statusProvider interface {
-		GetLoadingStatus() (model, phase string, progress float64)
-	}
-	if p, ok := s.scheduler.(statusProvider); ok {
-		resp.Model, resp.Phase, resp.Progress = p.GetLoadingStatus()
+	if s.loadingStatus != nil {
+		resp.Model, resp.Phase, resp.Progress = s.loadingStatus.GetLoadingStatus()
+	} else {
+		type statusProvider interface {
+			GetLoadingStatus() (model, phase string, progress float64)
+		}
+		if p, ok := s.scheduler.(statusProvider); ok {
+			resp.Model, resp.Phase, resp.Progress = p.GetLoadingStatus()
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

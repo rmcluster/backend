@@ -63,9 +63,14 @@ func main() {
 	}
 	tracker := tracker.NewTracker()
 	tracker.AddRoutes(mux)
-	scheduler := scheduling.NewFcfsScheduler(scheduling.NewInstanceFactory(&ramalama, 49170))
+	factory := scheduling.NewInstanceFactory(&ramalama, 49170)
+	loadingTracker := &scheduling.LoadingStatusTracker{}
+	if setter, ok := factory.(scheduling.PhaseCallbackSetter); ok {
+		setter.SetPhaseCallback(loadingTracker.OnPhaseUpdate)
+	}
+	scheduler := scheduling.NewPartitioningScheduler(factory, 1)
 	tracker.Subscribe(schedulersubscriber.NewSchedulerSubscriber(scheduler))
-	server := server.NewServer(ramalama, scheduler)
+	server := server.NewServer(ramalama, scheduler, loadingTracker)
 	ui := uiapi.New(tracker, ramalama)
 	ui.RegisterHandlers(mux)
 
