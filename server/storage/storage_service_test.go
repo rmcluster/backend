@@ -267,10 +267,115 @@ func TestOpenDirReaddir(t *testing.T) {
 	}
 }
 
-func TestOpenFileWriteRejected(t *testing.T) {
-	svc := newTestService(t)
-	_, err := svc.OpenFile(context.Background(), "/x", os.O_CREATE|os.O_WRONLY, 0o644)
+func newServiceWithGCAS(t *testing.T) (*StorageServiceImpl, *fakeCAS) {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := OpenDB(dbPath, 1)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	cas := newFakeCAS()
+	svc, err := NewStorageService(db, &fakeGCAS{cas})
+	if err != nil {
+		t.Fatalf("NewStorageService: %v", err)
+	}
+	return svc, cas
+}
+
+func TestOpenFileWriteCreate(t *testing.T) {
+	ctx := context.Background()
+	svc, cas := newServiceWithGCAS(t)
+
+	f, err := svc.OpenFile(ctx, "/hello.txt", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body := []byte("hello, world!")
+	if n, err := f.Write(body); err != nil || n != len(body) {
+		t.Fatalf("write: n=%d err=%v", n, err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// Read it back.
+	r, err := svc.OpenFile(ctx, "/hello.txt", os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(body) {
+		t.Errorf("got %q want %q", got, body)
+	}
+
+	// Should have produced exactly one chunk in GCAS.
+	if len(cas.data) != 1 {
+		t.Errorf("want 1 chunk in GCAS, got %d", len(cas.data))
+	}
+}
+
+func TestOpenFileWriteOverwriteDecRefs(t *testing.T) {
+	ctx := context.Background()
+	svc, cas := newServiceWithGCAS(t)
+
+	write := func(body []byte) {
+		f, err := svc.OpenFile(ctx, "/x", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write(body); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write([]byte("first"))
+	if len(cas.data) != 1 {
+		t.Fatalf("after first write want 1 chunk, got %d", len(cas.data))
+	}
+
+	write([]byte("second"))
+	// Old chunk should be gone (refcount hit 0), only the new one remains.
+	if len(cas.data) != 1 {
+		t.Errorf("after overwrite want 1 chunk, got %d", len(cas.data))
+	}
+}
+
+func TestOpenFileWriteRejectsExistingDir(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newServiceWithGCAS(t)
+	if err := svc.Mkdir(ctx, "/d", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := svc.OpenFile(ctx, "/d", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err == nil {
-		t.Error("expected error for write open")
+		t.Error("expected error writing to a directory")
+	}
+}
+
+func TestOpenFileWriteParentMissing(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newServiceWithGCAS(t)
+	_, err := svc.OpenFile(ctx, "/missing/file", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("want os.ErrNotExist, got %v", err)
+	}
+}
+
+func TestOpenFileWriteRejectsAppend(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newServiceWithGCAS(t)
+	_, err := svc.OpenFile(ctx, "/x", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	if err == nil {
+		t.Error("expected error for O_APPEND open")
 	}
 }

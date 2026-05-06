@@ -116,8 +116,18 @@ func (s *StorageServiceImpl) Mkdir(ctx context.Context, name string, perm os.Fil
 
 // OpenFile implements [StorageService].
 func (s *StorageServiceImpl) OpenFile(ctx context.Context, name string, flag int, perm os.FileMode) (webdav.File, error) {
-	if flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE|os.O_TRUNC) != 0 {
-		return nil, errors.New("write open not yet implemented")
+	const writeMask = os.O_WRONLY | os.O_CREATE | os.O_TRUNC | os.O_EXCL
+	const required = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+
+	if flag&os.O_APPEND != 0 || flag&os.O_RDWR != 0 {
+		return nil, fmt.Errorf("unsupported open flags: %#o", flag)
+	}
+
+	if flag&(os.O_WRONLY|os.O_CREATE|os.O_TRUNC) != 0 {
+		if flag & ^writeMask != 0 || flag&required != required {
+			return nil, fmt.Errorf("unsupported open flags %#o", flag)
+		}
+		return s.openWrite(ctx, name, perm, flag&os.O_EXCL != 0)
 	}
 
 	p, err := normalisePath(name)
@@ -175,6 +185,187 @@ func (s *StorageServiceImpl) OpenFile(ctx context.Context, name string, flag int
 		gcas:   s.gcas,
 		ctx:    ctx,
 	}, nil
+}
+
+func (s *StorageServiceImpl) openWrite(ctx context.Context, name string, perm os.FileMode, exclusive bool) (webdav.File, error) {
+	p, err := normalisePath(name)
+	if err != nil {
+		return nil, err
+	}
+
+	if p == "/" {
+		return nil, fmt.Errorf("%w: cannot write to root", ErrIsDir)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	exists, isDir, err := pathLookupTx(ctx, tx, p)
+	if err != nil {
+		return nil, err
+	}
+
+	if exists && isDir {
+		return nil, fmt.Errorf("%w: %s", ErrIsDir, p)
+	}
+
+	if exists && exclusive {
+		return nil, os.ErrExist
+	}
+
+	parent := parentPath(p)
+	pExists, pIsDir, err := pathLookupTx(ctx, tx, parent)
+	if err != nil {
+		return nil, err
+	}
+
+	if !pExists {
+		return nil, os.ErrNotExist
+	}
+
+	if !pIsDir {
+		return nil, fmt.Errorf("%w: parent %s", ErrNotDir, parent)
+	}
+
+	mode := perm.Perm()
+	if mode == 0 {
+		mode = 0o666
+	}
+
+	return newWriteFile(ctx, p, mode, s.gcas, s.commitWrite), nil
+}
+
+func (s *StorageServiceImpl) commitWrite(ctx context.Context, p string, mode fs.FileMode, chunks []chunkRef, totalSize int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	exists, isDir, err := pathLookupTx(ctx, tx, p)
+	if err != nil {
+		return err
+	}
+
+	if exists && isDir {
+		return fmt.Errorf("%w: %s", ErrIsDir, p)
+	}
+
+	parent := parentPath(p)
+	pExists, pIsDir, err := pathLookupTx(ctx, tx, parent)
+	if err != nil {
+		return err
+	}
+
+	if !pExists || !pIsDir {
+		return fmt.Errorf("%w: parent %s", ErrNotDir, parent)
+	}
+
+	oldHashes, err := selectChunkHashesTx(ctx, tx, p)
+	if err != nil {
+		return err
+	}
+
+	var oldVersion int64
+	if exists {
+		if err := tx.QueryRowContext(ctx, `SELECT version FROM files WHERE path = ?`, p).Scan(&oldVersion); err != nil {
+			return fmt.Errorf("read version: %w", err)
+		}
+	}
+
+	now := time.Now().UnixNano()
+
+	if _, err := tx.ExecContext(ctx, `
+	    INSERT INTO files(path, parent_path, mode, size_bytes, mod_time_ns, version)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(path) DO UPDATE SET
+			mode = excluded.mode,
+			size_bytes = excluded.size_bytes,
+			mod_time_ns = excluded.mod_time_ns,
+			version = excluded.version`,
+		p, parent, int64(mode.Perm()), totalSize, now, oldVersion+1,
+	); err != nil {
+		return fmt.Errorf("upsert files: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM file_chunks WHERE file_path = ?`, p); err != nil {
+		return fmt.Errorf("delete old chunks: %w", err)
+	}
+
+	for i, c := range chunks {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO file_chunks(file_path, chunk_index, chunk_hash, chunk_size) VALUES (?, ?, ?, ?)`,
+			p, i, c.hash[:], c.size,
+		); err != nil {
+			return fmt.Errorf("insert chunk %d: %w", i, err)
+		}
+	}
+
+	for _, c := range chunks {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO chunk_refs(chunk_hash, ref_count) VALUES (?, 1)
+			ON CONFLICT(chunk_hash) DO UPDATE SET ref_count = ref_count + 1`, c.hash[:],
+		); err != nil {
+			return fmt.Errorf("incref chunk %w", err)
+		}
+	}
+
+	for _, h := range oldHashes {
+		if _, err := tx.ExecContext(ctx, `UPDATE chunk_refs SET ref_count = ref_count - 1 WHERE chunk_hash = ?`, h[:]); err != nil {
+			return fmt.Errorf("decref chunk %w", err)
+		}
+	}
+
+	var orphans []gcas.Hash
+	for _, h := range oldHashes {
+		var rc int64
+		if err := tx.QueryRowContext(ctx, `SELECT ref_count FROM chunk_refs WHERE chunk_hash = ?`, h[:]).Scan(&rc); err != nil {
+			return fmt.Errorf("read ref_count: %w", err)
+		}
+		if rc <= 0 {
+			orphans = append(orphans, h)
+			if _, err := tx.ExecContext(ctx, `DELETE FROM chunk_refs WHERE chunk_hash = ?`, h[:]); err != nil {
+				return fmt.Errorf("delete refcount row: %w", err)
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	for _, h := range orphans {
+		_ = s.gcas.Delete(ctx, h)
+	}
+
+	return nil
+}
+
+func selectChunkHashesTx(ctx context.Context, tx *sql.Tx, filePath string) ([]gcas.Hash, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT chunk_hash FROM file_chunks WHERE file_path = ? ORDER BY chunk_index ASC`, filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []gcas.Hash
+	for rows.Next() {
+		var b []byte
+		if err := rows.Scan(&b); err != nil {
+			return nil, err
+		}
+
+		if len(b) != len(gcas.Hash{}) {
+			return nil, fmt.Errorf("chunk hash size mismatched, expected %d, got %d", len(gcas.Hash{}), len(b))
+		}
+
+		var hash gcas.Hash
+		copy(hash[:], b)
+		out = append(out, hash)
+	}
+
+	return out, rows.Err()
 }
 
 func (s *StorageServiceImpl) loadChunks(ctx context.Context, filePath string) ([]chunkRef, error) {
