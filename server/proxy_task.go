@@ -53,8 +53,26 @@ func (p *proxyTask) PerformInference(instance scheduling.Instance) (err error) {
 	// Forward the request to the upstream llama server. The Go reverse proxy
 	// uses a panic-based abort path for client disconnects and other write
 	// failures; recover so that a cancelled stream does not crash the server.
-	instance.ReverseProxy().ServeHTTP(p.w, p.r)
+	//
+	// Wrap the writer so each chunk is flushed immediately; without this, gin's
+	// buffered ResponseWriter holds SSE/streaming tokens until the buffer fills
+	// rather than delivering them token-by-token.
+	instance.ReverseProxy().ServeHTTP(flushingWriter{p.w}, p.r)
 	return
 }
 
 var _ scheduling.Task = (*proxyTask)(nil)
+
+// flushingWriter wraps an http.ResponseWriter and flushes after every Write so
+// streaming responses (SSE, token-by-token JSON) reach the client immediately.
+type flushingWriter struct {
+	http.ResponseWriter
+}
+
+func (fw flushingWriter) Write(b []byte) (int, error) {
+	n, err := fw.ResponseWriter.Write(b)
+	if f, ok := fw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+	return n, err
+}

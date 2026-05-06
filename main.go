@@ -41,7 +41,7 @@ func main() {
 	router := openapi.NewRouter()
 	mux := http.NewServeMux()
 
-	// wrap mux with router
+	// Anything gin doesn't own (/announce, /servers) falls through to the mux.
 	router.NoRoute(gin.WrapH(mux))
 
 	ramalama := llama.Llama{
