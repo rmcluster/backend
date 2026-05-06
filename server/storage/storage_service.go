@@ -116,7 +116,95 @@ func (s *StorageServiceImpl) Mkdir(ctx context.Context, name string, perm os.Fil
 
 // OpenFile implements [StorageService].
 func (s *StorageServiceImpl) OpenFile(ctx context.Context, name string, flag int, perm os.FileMode) (webdav.File, error) {
-	panic("unimplemented")
+	if flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE|os.O_TRUNC) != 0 {
+		return nil, errors.New("write open not yet implemented")
+	}
+
+	p, err := normalisePath(name)
+	if err != nil {
+		return nil, err
+	}
+
+	var dMode, dUpdated int64
+	err = s.db.QueryRowContext(ctx, `SELECT mode, updated_at_ns FROM directories WHERE path = ?`, p).Scan(&dMode, &dUpdated)
+	if err == nil {
+		info := metaFileInfo{
+			name:    baseName(p),
+			mode:    fs.FileMode(dMode) | fs.ModeDir,
+			modTime: time.Unix(0, dUpdated),
+			isDir:   true,
+		}
+
+		return &dirFile{
+			info: info,
+			path: p,
+			db:   s.db,
+			ctx:  ctx,
+		}, nil
+	}
+
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("open %s (dir): %w", p, err)
+	}
+
+	var fMode, fSize, fMod int64
+	err = s.db.QueryRowContext(ctx, `SELECT mode, size_bytes, mod_time_ns FROM files WHERE path = ?`, p).Scan(&fMode, &fSize, &fMod)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, os.ErrNotExist
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open %s (file): %w", p, err)
+	}
+
+	chunks, err := s.loadChunks(ctx, p)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: load chunks: %w", p, err)
+	}
+
+	info := metaFileInfo{
+		name:    baseName(p),
+		size:    fSize,
+		mode:    fs.FileMode(fMode),
+		modTime: time.Unix(0, fMod),
+		isDir:   false,
+	}
+
+	return &readFile{
+		info:   info,
+		chunks: chunks,
+		gcas:   s.gcas,
+		ctx:    ctx,
+	}, nil
+}
+
+func (s *StorageServiceImpl) loadChunks(ctx context.Context, filePath string) ([]chunkRef, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT chunk_hash, chunk_size FROM file_chunks WHERE file_path = ? ORDER BY chunk_index ASC`, filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []chunkRef
+	for rows.Next() {
+		var hashBytes []byte
+		var size int64
+		if err := rows.Scan(&hashBytes, &size); err != nil {
+			return nil, err
+		}
+
+		if len(hashBytes) != len(gcas.Hash{}) {
+			return nil, fmt.Errorf("chunk hash size mismatched, expected %d, got %d", len(gcas.Hash{}), len(hashBytes))
+		}
+
+		var hash gcas.Hash
+		copy(hash[:], hashBytes)
+		out = append(out, chunkRef{
+			hash: hash,
+			size: size,
+		})
+	}
+
+	return out, rows.Err()
 }
 
 // RemoveAll implements [StorageService].
