@@ -331,17 +331,19 @@ func (s *UIApi) appendChatEvent(w http.ResponseWriter, r *http.Request, chatID s
 
 	s.chatLock.Lock()
 	session, ok := s.chatSessions[chatID]
-	if ok {
-		seq := len(session.Events) + 1
-		session.Events = append(session.Events, chatEvent{chatEventRequest: req, Sequence: seq})
-		s.chatSessions[chatID] = session
-	}
-	s.chatLock.Unlock()
-
 	if !ok {
-		writeAPIError(w, http.StatusNotFound, "chat session not found")
-		return
+		// Auto-create a minimal session for clients that skipped POST /api/ui/chats
+		// (e.g. after a server restart when in-memory sessions were lost).
+		session = chatSessionRecord{
+			ChatID:    chatID,
+			StartedAt: time.Now().Format(time.RFC3339),
+			Status:    "active",
+		}
 	}
+	seq := len(session.Events) + 1
+	session.Events = append(session.Events, chatEvent{chatEventRequest: req, Sequence: seq})
+	s.chatSessions[chatID] = session
+	s.chatLock.Unlock()
 
 	writeAPIJSON(w, http.StatusAccepted, map[string]any{"status": "accepted"})
 }
