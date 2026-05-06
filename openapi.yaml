@@ -1,0 +1,86 @@
+openapi: 3.0.4
+info:
+  title: "rmcluster server"
+  version: 0.0.1
+
+paths:
+  /announce:
+    get:
+      operationId: TrackerAnnounceGet
+      summary: Announce a new node
+      parameters:
+        - name: id
+          description: "The unique identifier of the node (should be generated and stored by the node itself)"
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: port
+          description: "The port for the llama-rpc server"
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: storage_port
+          description: "The port for the storage server"
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: ip
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        200:
+          description: "Successful announce"
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - interval
+                properties:
+                  interval:
+                    type: float
+                    description: "The number of seconds the client should wait between announces."
+  /servers:
+    get:
+      operationId: TrackerServersGet
+      summary: List all nodes currently known to the tracker
+      responses:
+        200:
+          description: "Successful listing of nodes"
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - servers
+                properties:
+                  servers:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                        - ip
+                        - port
+                        - last_seen
+                      properties:
+                        ip:
+                          type: string
+                        port:
+                          type: integer
+                        storage_port:
+                          type: integer
+                        last_seen:
+                          type: string
+                        hardware_model:
+                          type: string
+                        max_size:
+                          type: integer
+                        battery:
+                          type: number
+                        temperature:
+                          type: number

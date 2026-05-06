@@ -1,0 +1,6 @@
+# only the files in /go are actually useful scaffolding
+/main.go
+/Dockerfile
+/go.mod
+/go/README.md
+/api/**

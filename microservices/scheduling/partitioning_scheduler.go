@@ -35,18 +35,18 @@ type NodeAllocationInfo struct {
 
 func NewPartitioningScheduler(instanceFactory InstanceFactory, parallelismTarget int) *PartitioningScheduler {
 	scheduler := &PartitioningScheduler{
-		instanceFactory:    instanceFactory,
-		modelQueues:        make(map[string][]*timestampedTask),
-		unallocatedNodes:   make(map[string]Node),
-		allocatedNodes:     make(map[string]NodeAllocationInfo),
-		idleInstances:      make(map[string][]instanceInfo),
-		newTasksChan:       make(chan Task, 16),
-		nodeConnectChan:    make(chan Node, 16),
-		nodeDisconnectChan: make(chan Node, 16),
-		taskCancelledChan:  make(chan Task, 16),
-		taskCompletedChan:  make(chan TaskCompletionMessage, 16),
-		parallelismTarget:  parallelismTarget,
-		idleBias:           10 * time.Second,
+		instanceFactory:   instanceFactory,
+		modelQueues:       make(map[string][]*timestampedTask),
+		unallocatedNodes:  make(map[string]Node),
+		allocatedNodes:    make(map[string]NodeAllocationInfo),
+		idleInstances:     make(map[string][]instanceInfo),
+		newTasksChan:      make(chan Task),
+		nodeEventChan:     make(chan NodeEvent),
+		taskCancelledChan: make(chan Task),
+		taskCompletedChan: make(chan TaskCompletionMessage),
+		parallelismTarget: parallelismTarget,
+		idleBias:          10 * time.Second,
+		instanceDeadChan:  make(chan instanceInfo),
 	}
 	go scheduler.run()
 	return scheduler
@@ -74,11 +74,23 @@ type PartitioningScheduler struct {
 	idleBias          time.Duration // how many seconds of "advantage" tasks for an idle instance gets
 
 	// channels for the different notification types
-	newTasksChan       chan Task
-	nodeConnectChan    chan Node
-	nodeDisconnectChan chan Node
-	taskCancelledChan  chan Task
-	taskCompletedChan  chan TaskCompletionMessage
+	newTasksChan      chan Task
+	nodeEventChan     chan NodeEvent
+	taskCancelledChan chan Task
+	taskCompletedChan chan TaskCompletionMessage
+	instanceDeadChan  chan instanceInfo
+}
+
+type NodeEventType int
+
+const (
+	NodeConnect NodeEventType = iota
+	NodeDisconnect
+)
+
+type NodeEvent struct {
+	node      Node
+	eventType NodeEventType
 }
 
 // OnNewTask implements [Scheduler].
@@ -89,12 +101,12 @@ func (s *PartitioningScheduler) OnNewTask(task Task) {
 
 // OnNodeConnect implements [Scheduler].
 func (s *PartitioningScheduler) OnNodeConnect(node Node) {
-	s.nodeConnectChan <- node
+	s.nodeEventChan <- NodeEvent{node: node, eventType: NodeConnect}
 }
 
 // OnNodeDisconnect implements [Scheduler].
 func (s *PartitioningScheduler) OnNodeDisconnect(node Node) {
-	s.nodeDisconnectChan <- node
+	s.nodeEventChan <- NodeEvent{node: node, eventType: NodeDisconnect}
 }
 
 // OnTaskCancelled implements [Scheduler].
@@ -130,17 +142,15 @@ taskHandlerLoop:
 			task = s.modelQueues[highestScoringQueue][0].task
 			s.modelQueues[highestScoringQueue] = s.modelQueues[highestScoringQueue][1:]
 		} else { // wait for a task to arrive
-		taskWaitLoop:
+		awaitTaskLoop:
 			for {
 				select {
 				case task = <-s.newTasksChan:
-					break taskWaitLoop
+					break awaitTaskLoop
 				case taskCompletionMessage := <-s.taskCompletedChan:
 					s.handleTaskCompletion(taskCompletionMessage)
-				case node := <-s.nodeConnectChan:
-					s.handleNodeConnect(node)
-				case node := <-s.nodeDisconnectChan:
-					s.handleNodeDisconnect(node)
+				case nodeEvent := <-s.nodeEventChan:
+					s.handleNodeEvent(nodeEvent)
 				case task := <-s.taskCancelledChan:
 					s.handleTaskCancellation(task)
 				}
@@ -196,10 +206,8 @@ taskHandlerLoop:
 
 		for len(s.unallocatedNodes) == 0 {
 			select {
-			case node := <-s.nodeConnectChan:
-				s.handleNodeConnect(node)
-			case node := <-s.nodeDisconnectChan:
-				s.handleNodeDisconnect(node)
+			case nodeEvent := <-s.nodeEventChan:
+				s.handleNodeEvent(nodeEvent)
 			case task := <-s.taskCancelledChan:
 				s.handleTaskCancellation(task)
 			case completion := <-s.taskCompletedChan:
@@ -244,6 +252,11 @@ taskHandlerLoop:
 			usedNodes: nodes,
 		}
 
+		go func() {
+			instance.AwaitTermination()
+			s.instanceDeadChan <- instanceInfo
+		}()
+
 		for _, node := range nodes {
 			s.allocatedNodes[node.Id()] = NodeAllocationInfo{
 				instance: instance,
@@ -273,15 +286,24 @@ func (s *PartitioningScheduler) processEvents() {
 		select {
 		case taskCompletionMessage := <-s.taskCompletedChan:
 			s.handleTaskCompletion(taskCompletionMessage)
-		case node := <-s.nodeConnectChan:
-			s.handleNodeConnect(node)
-		case node := <-s.nodeDisconnectChan:
-			s.handleNodeDisconnect(node)
+		case nodeEvent := <-s.nodeEventChan:
+			s.handleNodeEvent(nodeEvent)
 		case task := <-s.taskCancelledChan:
 			s.handleTaskCancellation(task)
+		case instanceInfo := <-s.instanceDeadChan:
+			s.killInstance(instanceInfo)
 		default:
 			return
 		}
+	}
+}
+
+func (s *PartitioningScheduler) handleNodeEvent(nodeEvent NodeEvent) {
+	switch nodeEvent.eventType {
+	case NodeConnect:
+		s.handleNodeConnect(nodeEvent.node)
+	case NodeDisconnect:
+		s.handleNodeDisconnect(nodeEvent.node)
 	}
 }
 

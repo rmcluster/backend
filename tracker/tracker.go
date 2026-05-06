@@ -2,15 +2,17 @@ package tracker
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"math"
 	"net"
 	"net/http"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 // the number of seconds after which an RPC server is removed from the list
@@ -22,6 +24,7 @@ const interval = time.Second * 10
 type TrackerSubscriber interface {
 	OnNodeAdded(node RpcServerInfo)
 	OnNodeRemoved(node RpcServerInfo)
+	OnNodeUpdated(node RpcServerInfo)
 }
 
 type Tracker struct {
@@ -37,8 +40,10 @@ type clientInfo struct {
 }
 
 type RpcServerInfo struct {
+	Id            string    `json:"id"`
 	Ip            string    `json:"ip"`
 	Port          int       `json:"port"`
+	StoragePort   int       `json:"storage_port"`
 	LastSeen      time.Time `json:"last_seen"`
 	HardwareModel string    `json:"hardware_model"` // the hardware's model name
 	MaxSize       int64     `json:"max_size"`
@@ -53,121 +58,131 @@ func NewTracker() *Tracker {
 	}
 }
 
-func (t *Tracker) AddRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/announce", t.Announce)
-	mux.HandleFunc("/servers", t.ListServers)
-}
-
-func (t *Tracker) Announce(w http.ResponseWriter, r *http.Request) {
-	log.Printf("Announce request from %s: %v", r.Host, r.URL)
+func (t *Tracker) Announce(c *gin.Context) {
 	type response struct {
 		Interval int `json:"interval"`
 	}
 
-	port := r.URL.Query().Get("port")
-	if port == "" {
-		http.Error(w, "missing port", http.StatusBadRequest)
+	port, ok := c.GetQuery("port")
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing port"})
 		return
 	}
 
 	portNum, err := strconv.Atoi(port)
 	if err != nil {
-		http.Error(w, "invalid port", http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid port"})
 		return
 	}
 
-	ip := r.URL.Query().Get("ip")
-	if ip == "" {
-		// Fill with the remote IP while handling IPv4 and IPv6 forms.
-		if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-			ip = strings.Trim(host, "[]")
-		} else {
-			ip = strings.Trim(r.RemoteAddr, "[]")
+	// use the request's source address if ip is not specified
+	ip, ok := c.GetQuery("ip")
+	if !ok {
+		ip = c.RemoteIP()
+	}
+
+	id, ok := c.GetQuery("id")
+	if !ok {
+		// older clients (e.g. iOS app) don't send id; derive one from ip:port
+		id = fmt.Sprintf("%s:%d", ip, portNum)
+	}
+
+	var storagePort int
+	if storagePortStr, ok := c.GetQuery("storage_port"); ok {
+		storagePort, err = strconv.Atoi(storagePortStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid storage_port"})
+			return
 		}
 	}
 
-	hardwareModel := r.URL.Query().Get("model")
+	hardwareModel := c.Query("model")
 
 	var maxSize int64 = -1
-	if maxSizeStr := r.URL.Query().Get("max_size"); maxSizeStr != "" {
-		maxSize, _ = strconv.ParseInt(maxSizeStr, 10, 64)
+	if maxSizeStr, ok := c.GetQuery("max_size"); ok {
+		maxSize, err = strconv.ParseInt(maxSizeStr, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid max_size"})
+			return
+		}
 	}
 
 	var battery float64 = math.NaN()
-	if batteryStr := r.URL.Query().Get("battery"); batteryStr != "" {
-		battery, _ = strconv.ParseFloat(batteryStr, 64)
+	if batteryStr, ok := c.GetQuery("battery"); ok {
+		battery, err = strconv.ParseFloat(batteryStr, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid battery"})
+			return
+		}
 	}
 
 	var temperature float64 = math.NaN()
-	if temperatureStr := r.URL.Query().Get("temperature"); temperatureStr != "" {
-		temperature, _ = strconv.ParseFloat(temperatureStr, 64)
+	if temperatureStr, ok := c.GetQuery("temperature"); ok {
+		temperature, err = strconv.ParseFloat(temperatureStr, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid temperature"})
+			return
+		}
 	}
 
 	// validate ip
 	if net.ParseIP(ip) == nil {
-		http.Error(w, "invalid ip", http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid ip"})
 		return
 	}
 
-	clientId := ip // + ":" + port
-
-	func() {
-		t.Lock()
-		defer t.Unlock()
-		notifyNew := false
-
-		// avoid duplicate timers
-		if existingTimer := t.RpcServers[clientId].expiryTimer; existingTimer != nil {
-			existingTimer.Stop()
-			log.Printf("Reannounce from %s", clientId)
-		} else {
-			notifyNew = true
-			log.Printf("New announce from %s", clientId)
-		}
-
-		announceTime := time.Now()
-
-		serverInfo := RpcServerInfo{
-			LastSeen:      announceTime,
-			Ip:            ip,
-			Port:          portNum,
-			HardwareModel: hardwareModel,
-			MaxSize:       maxSize,
-			Battery:       battery,
-			Temperature:   temperature,
-		}
-
-		t.RpcServers[clientId] = clientInfo{
-			RpcServerInfo: serverInfo,
-			expiryTimer: time.AfterFunc(expiryDuration, func() {
-				t.Lock()
-				defer t.Unlock()
-
-				// there's a possible race condition if the client announces just as the timer expires,
-				// preventing the timer from being stopped. To prevent that, we verify that the last seen time
-				// has not been changed.
-				if t.RpcServers[clientId].LastSeen.Equal(announceTime) {
-					serverInfo := t.RpcServers[clientId].RpcServerInfo
-					delete(t.RpcServers, clientId)
-					t.notifyNodeRemoved(serverInfo)
-					log.Printf("Removed %s from tracker", clientId)
-				}
-			}),
-		}
-
-		if notifyNew {
-			t.notifyNodeAdded(serverInfo)
-		}
-	}()
-
-	// respond
-	w.Header().Add("Content-Type", "application/json")
-	err = json.NewEncoder(w).Encode(response{
-		Interval: int(interval.Seconds()),
+	t.RegisterNode(RpcServerInfo{
+		Id:            id,
+		Ip:            ip,
+		Port:          portNum,
+		StoragePort:   storagePort,
+		HardwareModel: hardwareModel,
+		MaxSize:       maxSize,
+		Battery:       battery,
+		Temperature:   temperature,
 	})
 
-	if err != nil {
-		log.Printf("Failed to respond to announce: %v", err)
+	// respond
+	c.JSON(http.StatusOK, gin.H{"interval": interval.Seconds()})
+}
+
+// RegisterNode registers or refreshes a node in the tracker.
+func (t *Tracker) RegisterNode(info RpcServerInfo) {
+	t.Lock()
+	defer t.Unlock()
+
+	clientId := info.Id
+	notifyNew := false
+
+	if existingTimer := t.RpcServers[clientId].expiryTimer; existingTimer != nil {
+		existingTimer.Stop()
+		log.Printf("Reannounce from %s", clientId)
+	} else {
+		notifyNew = true
+		log.Printf("New announce from %s", clientId)
+	}
+
+	announceTime := time.Now()
+	info.LastSeen = announceTime
+
+	t.RpcServers[clientId] = clientInfo{
+		RpcServerInfo: info,
+		expiryTimer: time.AfterFunc(expiryDuration, func() {
+			t.Lock()
+			defer t.Unlock()
+			if t.RpcServers[clientId].LastSeen.Equal(announceTime) {
+				serverInfo := t.RpcServers[clientId].RpcServerInfo
+				delete(t.RpcServers, clientId)
+				t.notifyNodeRemoved(serverInfo)
+				log.Printf("Removed %s from tracker", clientId)
+			}
+		}),
+	}
+
+	if notifyNew {
+		t.notifyNodeAdded(info)
+	} else {
+		t.notifyNodeUpdated(info)
 	}
 }
 
@@ -232,5 +247,11 @@ func (t *Tracker) notifyNodeAdded(node RpcServerInfo) {
 func (t *Tracker) notifyNodeRemoved(node RpcServerInfo) {
 	for subscriber := range t.subscribers {
 		subscriber.OnNodeRemoved(node)
+	}
+}
+
+func (t *Tracker) notifyNodeUpdated(node RpcServerInfo) {
+	for subscriber := range t.subscribers {
+		subscriber.OnNodeUpdated(node)
 	}
 }

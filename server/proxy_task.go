@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -35,7 +36,13 @@ func (p *proxyTask) Fail(err error) {
 }
 
 // PerformInference implements [scheduling.Task].
-func (p *proxyTask) PerformInference(instance scheduling.Instance) error {
+func (p *proxyTask) PerformInference(instance scheduling.Instance) (err error) {
+	// ServeHTTP can panic if the connection to the llama.cpp instance is broken, so we need to handle it and return an error
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("error proxying request for model %v: %v", p.model, r)
+		}
+	}()
 	log.Printf("Proxying request for model %v", p.model)
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -47,7 +54,7 @@ func (p *proxyTask) PerformInference(instance scheduling.Instance) error {
 	// uses a panic-based abort path for client disconnects and other write
 	// failures; recover so that a cancelled stream does not crash the server.
 	instance.ReverseProxy().ServeHTTP(p.w, p.r)
-	return nil
+	return
 }
 
 var _ scheduling.Task = (*proxyTask)(nil)

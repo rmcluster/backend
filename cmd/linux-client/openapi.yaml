@@ -1,0 +1,167 @@
+openapi: 3.1.0
+info:
+  title: Mobile Storage API
+  description: API for mobile clients to store and retrieve data
+  version: 1.0.0
+paths:
+  /chunk/{chunk_id}:
+    description: |
+      GET/PUT/DELETE Operations for chunks
+      chunk_id is the SHA256 checksum of the chunk
+    get:
+      summary: Get a chunk
+      description: Retrieves a chunk of data
+      parameters:
+        - name: chunk_id
+          in: path
+          required: true
+          description: The SHA256 checksum of the chunk
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Chunk not found or corrupted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    enum:
+                      - corrupted_chunk
+                      - not_found
+        "400":
+          description: Invalid chunk ID format
+    put:
+      summary: Store a chunk
+      description: Stores a chunk of data
+      parameters:
+        - name: chunk_id
+          in: path
+          required: true
+          description: The SHA256 checksum of the chunk
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    enum:
+                      - bad_id
+                      - checksum_incorrect
+        "507":
+          description: Not enough storage space
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    enum:
+                      - insufficient_storage
+    delete:
+      summary: Delete a chunk
+      description: Deletes a chunk of data
+      parameters:
+        - name: chunk_id
+          in: path
+          required: true
+          description: The SHA256 checksum of the chunk
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+        "404":
+          description: Chunk not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    enum:
+                      - not_found
+  /chunks/list:
+    get:
+      summary: Get a list of chunks
+      description: Retrieves a list of chunks of data
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+                  description: Chunk ID
+  /chunks/healthcheck:
+    get:
+      summary: Health check
+      description: Checks the health of the chunks stored on the device
+      parameters:
+        - name: max_age
+          in: query
+          description: Maximum age in seconds to allow reusing cached healthcheck
+          required: false
+          schema:
+            type: integer
+            example: 300
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - healthy
+                      - degraded
+                  bad_chunks:
+                    type: array
+                    items:
+                      type: string
+                    description: List of chunks that are corrupted or missing
+  /storage_info:
+    get:
+      summary: Storage info
+      description: Retrieves storage information
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_space:
+                    type: integer
+                    description: Total storage space (in bytes)
+                  used_space:
+                    type: integer
+                    description: Used storage space (in bytes)
+                  available_space:
+                    type: integer
+                    description: Available storage space (in bytes)
