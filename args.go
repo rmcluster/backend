@@ -12,6 +12,7 @@ import (
 )
 
 type args struct {
+	Gcasdb      *string
 	Ramalama    []string
 	Port        *int
 	Host        *string
@@ -92,6 +93,19 @@ func parseArgs(cli []string) (a args, rest []string, err error) {
 				return args{}, nil, fmt.Errorf("invalid duration %v: %w", cli[1], err)
 			}
 			a.IdleTimeout = &timeout
+
+			cli = cli[2:]
+
+		case "-gcasdb":
+			if a.Gcasdb != nil {
+				return args{}, nil, fmt.Errorf("%s may only be passed at most once", cli[0])
+			}
+
+			if len(cli) < 2 {
+				return args{}, nil, fmt.Errorf("expected path to gcas database after %s", cli[0])
+			}
+
+			a.Gcasdb = &cli[1]
 
 			cli = cli[2:]
 

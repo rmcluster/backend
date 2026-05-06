@@ -32,12 +32,18 @@ type CAS interface {
 
 type HashNotFoundError struct{}
 
-func (e *HashNotFoundError) Error() string {
+func (e HashNotFoundError) Error() string {
 	return "Chunk not found"
 }
 
 type HashExistsError struct{}
 
-func (e *HashExistsError) Error() string {
+func (e HashExistsError) Error() string {
 	return "Chunk already exists"
+}
+
+type DataCorruptError struct{}
+
+func (e DataCorruptError) Error() string {
+	return "Data is corrupted"
 }

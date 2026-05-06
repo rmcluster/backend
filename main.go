@@ -15,6 +15,8 @@ import (
 	"github.com/wk-y/rama-swap/microservices/homepage"
 	"github.com/wk-y/rama-swap/microservices/scheduling"
 	"github.com/wk-y/rama-swap/server"
+	"github.com/wk-y/rama-swap/server/gcas"
+	gcassubscriber "github.com/wk-y/rama-swap/server/gcas_subscriber"
 	"github.com/wk-y/rama-swap/server/openapi"
 	schedulersubscriber "github.com/wk-y/rama-swap/server/scheduler_subscriber"
 	"github.com/wk-y/rama-swap/tracker"
@@ -46,8 +48,25 @@ func main() {
 	ramalama := llama.Llama{
 		Command: args.Ramalama,
 	}
+
+	if args.Gcasdb == nil {
+		log.Fatalf("No GCAS database specified")
+	}
+
+	gcasdb, err := gcas.OpenDB(*args.Gcasdb)
+	if err != nil {
+		log.Fatalf("Failed to open GCAS database: %v", err)
+	}
+	defer func() {
+		if err := gcasdb.Close(); err != nil {
+			log.Printf("Failed to close GCAS database: %v", err)
+		}
+	}()
+
 	scheduler := scheduling.NewPartitioningScheduler(scheduling.NewInstanceFactory(&ramalama, 49170), 3)
 	tracker.DefaultTracker.Subscribe(schedulersubscriber.NewSchedulerSubscriber(scheduler))
+	cas := gcas.NewGCAS(gcasdb)
+	tracker.DefaultTracker.Subscribe(gcassubscriber.NewGCASSubscriber(cas))
 	server := server.NewServer(ramalama, scheduler)
 	dashboard := dashboard.NewDashboard(tracker.DefaultTracker)
 	dashboard.RegisterHandlers(mux)
