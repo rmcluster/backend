@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/net/webdav"
 
 	"github.com/wk-y/rama-swap/llama"
 	"github.com/wk-y/rama-swap/microservices/dashboard"
@@ -18,7 +19,6 @@ import (
 	"github.com/wk-y/rama-swap/server"
 	"github.com/wk-y/rama-swap/server/openapi"
 	schedulersubscriber "github.com/wk-y/rama-swap/server/scheduler_subscriber"
-	"github.com/wk-y/rama-swap/server/storage"
 	"github.com/wk-y/rama-swap/tracker"
 )
 
@@ -55,7 +55,7 @@ func main() {
 	dashboard.RegisterHandlers(mux)
 	homepage := homepage.NewHomepage()
 	homepage.RegisterHandlers(mux)
-	webdavService := webdavservice.NewWebDavService(storage.NewStorageService(cas))
+	webdavService := webdavservice.NewWebDavService(webdav.NewMemFS())
 	webdavService.RegisterGinHandlers(router)
 
 	server.ModelNameMangler = func(s string) string {
