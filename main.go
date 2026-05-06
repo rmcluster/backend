@@ -70,26 +70,17 @@ func main() {
 		Command: args.Ramalama,
 	}
 
-	if args.Gcasdb == nil {
-		log.Fatalf("No GCAS database specified")
+	tracker := tracker.NewTracker()
+	tracker.AddRoutes(mux)
+	factory := scheduling.NewInstanceFactory(&ramalama, 49170)
+	loadingTracker := &scheduling.LoadingStatusTracker{}
+	if setter, ok := factory.(scheduling.PhaseCallbackSetter); ok {
+		setter.SetPhaseCallback(loadingTracker.OnPhaseUpdate)
 	}
-
-	gcasdb, err := gcas.OpenDB(*args.Gcasdb)
-	if err != nil {
-		log.Fatalf("Failed to open GCAS database: %v", err)
-	}
-	defer func() {
-		if err := gcasdb.Close(); err != nil {
-			log.Printf("Failed to close GCAS database: %v", err)
-		}
-	}()
-
-	scheduler := scheduling.NewPartitioningScheduler(scheduling.NewInstanceFactory(&ramalama, 49170), 3)
-	tracker.DefaultTracker.Subscribe(schedulersubscriber.NewSchedulerSubscriber(scheduler))
-	cas := gcas.NewGCAS(gcasdb)
-	tracker.DefaultTracker.Subscribe(gcassubscriber.NewGCASSubscriber(cas))
-	server := server.NewServer(ramalama, scheduler)
-	ui := uiapi.New(tracker.DefaultTracker, ramalama)
+	scheduler := scheduling.NewPartitioningScheduler(factory, 1)
+	tracker.Subscribe(schedulersubscriber.NewSchedulerSubscriber(scheduler))
+	server := server.NewServer(ramalama, scheduler, loadingTracker)
+	ui := uiapi.New(tracker, ramalama)
 	ui.RegisterHandlers(mux)
 
 	server.ModelNameMangler = func(s string) string {
