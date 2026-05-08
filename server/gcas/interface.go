@@ -45,5 +45,5 @@ func (e HashExistsError) Error() string {
 type DataCorruptError struct{}
 
 func (e DataCorruptError) Error() string {
-	return "Chunk data is corrupt"
+	return "Data is corrupted"
 }

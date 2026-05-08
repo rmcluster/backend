@@ -3,3 +3,4 @@
                              specify the ramalama command to use
   -port                      specify the port number to bind to
   -host                      specify the host to bind to
+  -gcasdb                    specify the path to the GCAS database
