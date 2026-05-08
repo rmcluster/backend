@@ -63,8 +63,15 @@ func main() {
 	router := openapi.NewRouter()
 	mux := http.NewServeMux()
 
-	// Anything gin doesn't own (/announce, /servers) falls through to the mux.
-	router.NoRoute(gin.WrapH(mux))
+	// Forward everything gin doesn't own (/announce, /servers) to the mux.
+	// A root-level /*path wildcard would conflict with gin's /announce and /servers
+	// nodes, so we enumerate the prefixes used by the mux handlers instead.
+	// NoRoute alone is insufficient: gin pre-sets 404 on the writer before calling
+	// NoRoute handlers, which prevents the mux from writing a successful response.
+	for _, prefix := range []string{"/api", "/v1", "/upstream", "/dashboard"} {
+		router.Any(prefix+"/*path", gin.WrapH(mux))
+		router.Any(prefix, gin.WrapH(mux))
+	}
 
 	ramalama := llama.Llama{
 		Command: args.Ramalama,
