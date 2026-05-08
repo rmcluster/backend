@@ -379,3 +379,167 @@ func TestOpenFileWriteRejectsAppend(t *testing.T) {
 		t.Error("expected error for O_APPEND open")
 	}
 }
+
+func mustWrite(t *testing.T, svc *StorageServiceImpl, p string, body []byte) {
+	t.Helper()
+	f, err := svc.OpenFile(context.Background(), p, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		t.Fatalf("open %s: %v", p, err)
+	}
+	if _, err := f.Write(body); err != nil {
+		t.Fatalf("write %s: %v", p, err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close %s: %v", p, err)
+	}
+}
+
+func TestRemoveAllFile(t *testing.T) {
+	ctx := context.Background()
+	svc, cas := newServiceWithGCAS(t)
+
+	mustWrite(t, svc, "/x", []byte("hello"))
+	if len(cas.data) != 1 {
+		t.Fatalf("setup: want 1 chunk, got %d", len(cas.data))
+	}
+
+	if err := svc.RemoveAll(ctx, "/x"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Stat(ctx, "/x"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("post-remove stat: want ErrNotExist, got %v", err)
+	}
+	if len(cas.data) != 0 {
+		t.Errorf("want chunk deleted, got %d remaining", len(cas.data))
+	}
+}
+
+func TestRemoveAllDirRecursive(t *testing.T) {
+	ctx := context.Background()
+	svc, cas := newServiceWithGCAS(t)
+
+	if err := svc.Mkdir(ctx, "/d", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Mkdir(ctx, "/d/sub", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, svc, "/d/a", []byte("aaa"))
+	mustWrite(t, svc, "/d/sub/b", []byte("bbb"))
+
+	if err := svc.RemoveAll(ctx, "/d"); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"/d", "/d/sub", "/d/a", "/d/sub/b"} {
+		if _, err := svc.Stat(ctx, p); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("after remove, %s: want ErrNotExist, got %v", p, err)
+		}
+	}
+	if len(cas.data) != 0 {
+		t.Errorf("want all chunks deleted, got %d", len(cas.data))
+	}
+}
+
+func TestRemoveAllRootForbidden(t *testing.T) {
+	svc, _ := newServiceWithGCAS(t)
+	if err := svc.RemoveAll(context.Background(), "/"); err == nil {
+		t.Error("expected error removing root")
+	}
+}
+
+func TestRenameFile(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newServiceWithGCAS(t)
+	mustWrite(t, svc, "/a", []byte("hello"))
+
+	if err := svc.Rename(ctx, "/a", "/b"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Stat(ctx, "/a"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("/a still exists: %v", err)
+	}
+	r, err := svc.OpenFile(ctx, "/b", os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	got, err := io.ReadAll(r)
+	if err != nil || string(got) != "hello" {
+		t.Errorf("read /b: %q err=%v", got, err)
+	}
+}
+
+func TestRenameDirSubtree(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newServiceWithGCAS(t)
+
+	if err := svc.Mkdir(ctx, "/d", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Mkdir(ctx, "/d/sub", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, svc, "/d/sub/x", []byte("xx"))
+
+	if err := svc.Rename(ctx, "/d", "/e"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Stat(ctx, "/d"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("/d still exists")
+	}
+	for _, p := range []string{"/e", "/e/sub", "/e/sub/x"} {
+		if _, err := svc.Stat(ctx, p); err != nil {
+			t.Errorf("stat %s: %v", p, err)
+		}
+	}
+}
+
+func TestRenameDestExists(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newServiceWithGCAS(t)
+	mustWrite(t, svc, "/a", []byte("a"))
+	mustWrite(t, svc, "/b", []byte("b"))
+	err := svc.Rename(ctx, "/a", "/b")
+	if !errors.Is(err, os.ErrExist) {
+		t.Errorf("want ErrExist, got %v", err)
+	}
+}
+
+func TestRenameIntoOwnDescendant(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newServiceWithGCAS(t)
+	if err := svc.Mkdir(ctx, "/d", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Rename(ctx, "/d", "/d/sub"); err == nil {
+		t.Error("expected error renaming into own descendant")
+	}
+}
+
+func TestGarbageCollect(t *testing.T) {
+	ctx := context.Background()
+	svc, cas := newServiceWithGCAS(t)
+
+	orphan := []byte("nobody refs me")
+	h := sha256.Sum256(orphan)
+	if err := cas.Put(ctx, h, orphan); err != nil {
+		t.Fatal(err)
+	}
+
+	mustWrite(t, svc, "/x", []byte("kept"))
+
+	if len(cas.data) != 2 {
+		t.Fatalf("setup: want 2 chunks, got %d", len(cas.data))
+	}
+
+	if err := svc.GarbageCollect(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := cas.data[h]; ok {
+		t.Errorf("orphan chunk should have been GCed")
+	}
+	if len(cas.data) != 1 {
+		t.Errorf("want 1 chunk remaining, got %d", len(cas.data))
+	}
+}

@@ -61,7 +61,59 @@ func (m metaFileInfo) Sys() any {
 
 // GarbageCollect implements [StorageService].
 func (s *StorageServiceImpl) GarbageCollect(ctx context.Context) error {
-	panic("unimplemented")
+	live, err := s.snapshotLiveHashes(ctx)
+
+	if err != nil {
+		return fmt.Errorf("snapshot live hashes: %w", err)
+	}
+
+	ch, err := s.gcas.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list GCAS hashes: %w", err)
+	}
+
+	for h := range ch {
+		if _, alive := live[h]; alive {
+			continue
+		}
+		if err := s.gcas.Delete(ctx, h); err != nil {
+			var nf *gcas.HashNotFoundError
+
+			if errors.As(err, &nf) {
+				continue
+			}
+			return fmt.Errorf("delete GCAS hash %x: %w", h, err)
+		}
+	}
+
+	return nil
+}
+
+func (s *StorageServiceImpl) snapshotLiveHashes(ctx context.Context) (map[gcas.Hash]struct{}, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT chunk_hash FROM chunk_refs WHERE ref_count > 0`)
+
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[gcas.Hash]struct{}{}
+	for rows.Next() {
+		var b []byte
+		if err := rows.Scan(&b); err != nil {
+			return nil, err
+		}
+
+		if len(b) != len(gcas.Hash{}) {
+			return nil, fmt.Errorf("chunk hash size mismatch, expected %d, got %d", len(gcas.Hash{}), len(b))
+		}
+
+		var h gcas.Hash
+		copy(h[:], b)
+		out[h] = struct{}{}
+	}
+
+	return out, rows.Err()
 }
 
 // Mkdir implements [StorageService].
@@ -400,12 +452,181 @@ func (s *StorageServiceImpl) loadChunks(ctx context.Context, filePath string) ([
 
 // RemoveAll implements [StorageService].
 func (s *StorageServiceImpl) RemoveAll(ctx context.Context, name string) error {
-	panic("unimplemented")
+	p, err := normalisePath(name)
+
+	if err != nil {
+		return err
+	}
+
+	if p == "/" {
+		return fmt.Errorf("%w: cannot remove root", ErrInvalidPath)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	exists, isDir, err := pathLookupTx(ctx, tx, p)
+	if err != nil {
+		return err
+	}
+
+	if !exists {
+		return os.ErrNotExist
+	}
+
+	hashes, err := collectSubtreeChunkHashesTx(ctx, tx, p)
+	if err != nil {
+		return err
+	}
+
+	if isDir {
+		lo, hi := subtreeBounds(p)
+
+		if _, err := tx.ExecContext(ctx, `DELETE FROM file_chunks WHERE file_path >= ? AND file_path < ?`, lo, hi); err != nil {
+			return fmt.Errorf("delete file chunks: %w", err)
+		}
+
+		if _, err := tx.ExecContext(ctx, `DELETE FROM files WHERE path >= ? AND path < ?`, lo, hi); err != nil {
+			return fmt.Errorf("delete subtree files: %w", err)
+		}
+
+		if _, err := tx.ExecContext(ctx, `DELETE FROM directories WHERE path = ? OR (path >= ? AND path < ?)`, p, lo, hi); err != nil {
+			return fmt.Errorf("delete subtree directories: %w", err)
+		}
+	} else {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM file_chunks WHERE file_path = ?`, p); err != nil {
+			return fmt.Errorf("delete chunks: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM files WHERE path = ?`, p); err != nil {
+			return fmt.Errorf("delete file: %w", err)
+		}
+	}
+
+	orphans, err := decRefAndCollectOrphansTx(ctx, tx, hashes)
+	if err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	for _, h := range orphans {
+		_ = s.gcas.Delete(ctx, h)
+	}
+
+	return nil
 }
 
 // Rename implements [StorageService].
 func (s *StorageServiceImpl) Rename(ctx context.Context, oldName string, newName string) error {
-	panic("unimplemented")
+	src, err := normalisePath(oldName)
+	if err != nil {
+		return err
+	}
+
+	dst, err := normalisePath(newName)
+	if err != nil {
+		return err
+	}
+
+	if src == "/" || dst == "/" {
+		return fmt.Errorf("%w: cannot rename root", ErrInvalidPath)
+	}
+
+	if src == dst {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	srcExists, srcIsDir, err := pathLookupTx(ctx, tx, src)
+	if err != nil {
+		return err
+	}
+	if !srcExists {
+		return os.ErrNotExist
+	}
+
+	dstExists, _, err := pathLookupTx(ctx, tx, dst)
+	if err != nil {
+		return err
+	}
+	if dstExists {
+		return os.ErrExist
+	}
+
+	dstParent := parentPath(dst)
+	dpExists, dpIsDir, err := pathLookupTx(ctx, tx, dstParent)
+	if err != nil {
+		return err
+	}
+	if !dpExists {
+		return os.ErrNotExist
+	}
+	if !dpIsDir {
+		return fmt.Errorf("%w: parent %s", ErrNotDir, dstParent)
+	}
+
+	if srcIsDir {
+		lo, hi := subtreeBounds(src)
+		if dst == src || (dst >= lo && dst < hi) {
+			return fmt.Errorf("%w: cannot rename %s into its own descendant %s", ErrInvalidPath, src, dst)
+		}
+		if err := renameSubtreeTx(ctx, tx, src, dst); err != nil {
+			return err
+		}
+	} else {
+		if err := renameFileTx(ctx, tx, src, dst); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func renameFileTx(ctx context.Context, tx *sql.Tx, src, dst string) error {
+	if _, err := tx.ExecContext(ctx, `UPDATE files SET path = ?, parent_path = ? WHERE path = ?`, dst, parentPath(dst), src); err != nil {
+		return fmt.Errorf("update file row: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `UPDATE file_chunks SET file_path = ? WHERE file_path = ?`, dst, src); err != nil {
+		return fmt.Errorf("update file_chunks rows: %w", err)
+	}
+
+	return nil
+}
+
+func renameSubtreeTx(ctx context.Context, tx *sql.Tx, src, dst string) error {
+	lo, hi := subtreeBounds(src)
+
+	if _, err := tx.ExecContext(ctx, `UPDATE directories SET path = ?, parent_path = ? WHERE path = ?`, dst, parentPath(dst), src); err != nil {
+		return fmt.Errorf("update src directory row: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `UPDATE directories SET path = ? || substr(path, ?), parent_path = ? || substr(parent_path, ?)
+		WHERE path >= ? AND path < ?`, dst, len(src)+1, dst, len(src)+1, lo, hi); err != nil {
+		return fmt.Errorf("update descendant directories: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `UPDATE files SET path = ? || substr(path, ?), parent_path = ? || substr(parent_path, ?)
+		WHERE path >= ? AND path < ?`, dst, len(src)+1, dst, len(src)+1, lo, hi); err != nil {
+		return fmt.Errorf("update descendant files: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `UPDATE file_chunks SET file_path = ? || substr(file_path, ?) WHERE file_path >= ? AND file_path < ?`,
+		dst, len(src)+1, lo, hi); err != nil {
+		return fmt.Errorf("update descendant file_chunks: %w", err)
+	}
+
+	return nil
 }
 
 // Stat implements [StorageService].
