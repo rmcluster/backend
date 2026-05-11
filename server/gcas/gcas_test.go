@@ -533,6 +533,121 @@ func TestGCASGetCorruptNode(t *testing.T) {
 	}
 }
 
+// deleteErrCAS wraps mockCAS but returns a fixed error from Delete,
+// allowing tests to exercise the error-propagation branch in GcasImpl.Delete.
+type deleteErrCAS struct {
+	*mockCAS
+	deleteErr error
+}
+
+func (d *deleteErrCAS) Delete(_ context.Context, _ Hash) error {
+	return d.deleteErr
+}
+
+// TestGCASDeleteNodeError verifies that when a connected node returns a non-HashNotFound
+// error from Delete, GCAS propagates that error without modifying the database record.
+func TestGCASDeleteNodeError(t *testing.T) {
+	gcas, db, err := createTestGCAS(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	inner := NewMockCAS("node0")
+	sentinelErr := errors.New("network failure")
+	errCAS := &deleteErrCAS{mockCAS: inner, deleteErr: sentinelErr}
+	gcas.AddNode(errCAS)
+
+	data := []byte("hello")
+	hash := sha256.Sum256(data)
+	if err = gcas.Put(context.Background(), hash, data); err != nil {
+		t.Fatal(err)
+	}
+
+	if err = gcas.Delete(context.Background(), hash); !errors.Is(err, sentinelErr) {
+		t.Errorf("expected sentinel error, got %v", err)
+	}
+
+	// The DB record must still exist because the delete was aborted.
+	_, err = gcas.Get(context.Background(), hash)
+	if errors.Is(err, HashNotFoundError{}) {
+		t.Error("DB record was removed despite node delete failure")
+	}
+}
+
+// TestGCASDeleteExecError verifies that a DB failure on the DELETE statement is propagated.
+// It uses a SQLite BEFORE DELETE trigger to make the ExecContext call fail after the
+// initial SELECT succeeds.
+func TestGCASDeleteExecError(t *testing.T) {
+	gcas, db, err := createTestGCAS(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	data := []byte("hello")
+	hash := sha256.Sum256(data)
+	if err = gcas.Put(context.Background(), hash, data); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = db.Exec(`CREATE TRIGGER prevent_delete BEFORE DELETE ON chunks BEGIN SELECT RAISE(ABORT, 'delete prevented'); END`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err = gcas.Delete(context.Background(), hash); err == nil {
+		t.Error("expected DB error from ExecContext, got nil")
+	}
+}
+
+// TestGCASGetDBError verifies that a DB failure during Get is propagated to the caller.
+func TestGCASGetDBError(t *testing.T) {
+	gcas, db, err := createTestGCAS(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	hash := sha256.Sum256([]byte("hello"))
+	_, err = gcas.Get(context.Background(), hash)
+	if err == nil || errors.Is(err, HashNotFoundError{}) {
+		t.Errorf("expected a DB error, got %v", err)
+	}
+}
+
+// TestGCASDeleteDBError verifies that a DB failure during Delete is propagated to the caller.
+func TestGCASDeleteDBError(t *testing.T) {
+	gcas, db, err := createTestGCAS(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	hash := sha256.Sum256([]byte("hello"))
+	err = gcas.Delete(context.Background(), hash)
+	if err == nil || errors.Is(err, HashNotFoundError{}) {
+		t.Errorf("expected a DB error, got %v", err)
+	}
+}
+
+// TestGCASPutDBError verifies that a DB failure when checking for duplicates in Put
+// is propagated to the caller.
+func TestGCASPutDBError(t *testing.T) {
+	gcas, db, err := createTestGCAS(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	data := []byte("hello")
+	hash := sha256.Sum256(data)
+	err = gcas.Put(context.Background(), hash, data)
+	if err == nil {
+		t.Error("expected a DB error, got nil")
+	}
+}
+
 func createTestGCAS(numNodes int) (GCAS, *sql.DB, error) {
 	db, err := OpenDB(":memory:")
 	gcas := NewGCAS(db)
