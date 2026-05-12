@@ -19,7 +19,7 @@ const pragmaString = `PRAGMA journal_mode=WAL;
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-const dbVersion = 1
+const dbVersion = 2
 
 func OpenDB(dbPath string) (*sql.DB, error) {
 	return OpenDBWithVersion(dbPath, dbVersion)
