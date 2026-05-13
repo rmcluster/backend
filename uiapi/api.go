@@ -57,6 +57,7 @@ type apiAddModelRequest struct {
 }
 
 type dashboardServerSnapshot struct {
+	Id            string   `json:"id"`
 	Ip            string   `json:"ip"`
 	Port          int      `json:"port"`
 	HardwareModel string   `json:"hardware_model"`
@@ -669,6 +670,7 @@ func (s *UIApi) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {
 	payload := dashboardDataResponse{Servers: make([]dashboardServerSnapshot, 0, len(servers))}
 	for _, server := range servers {
 		snapshot := dashboardServerSnapshot{
+			Id:            server.Id,
 			Ip:            server.Ip,
 			Port:          server.Port,
 			HardwareModel: server.HardwareModel,
