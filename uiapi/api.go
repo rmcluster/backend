@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/wk-y/rama-swap/tracker"
 )
 
 // ---- API types ----
@@ -194,9 +196,21 @@ func (s *UIApi) handleAPIDeviceRegister(w http.ResponseWriter, r *http.Request) 
 	s.deviceRegistry[rec.DeviceID] = rec
 	s.deviceLock.Unlock()
 
+<<<<<<< HEAD
 	announceURL := fmt.Sprintf("/announce?ip=%s&port=%d&model=%s", rec.IP, rec.RPCPort, rec.Label)
 	r2, _ := http.NewRequest(http.MethodGet, announceURL, nil)
 	s.tracker.Announce(noopResponseWriter{}, r2)
+=======
+	s.tracker.RegisterNode(tracker.RpcServerInfo{
+		Id:            rec.DeviceID,
+		Ip:            rec.IP,
+		Port:          rec.RPCPort,
+		HardwareModel: rec.Label,
+		MaxSize:       -1,
+		Battery:       math.NaN(),
+		Temperature:   math.NaN(),
+	})
+>>>>>>> 8d0d6f814ae239ab144823bc99aa322cd778f42e
 
 	writeAPIJSON(w, http.StatusCreated, map[string]any{
 		"status":   "registered",
@@ -235,9 +249,21 @@ func (s *UIApi) handleAPIDeviceAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+<<<<<<< HEAD
 	announceURL := fmt.Sprintf("/announce?ip=%s&port=%d&model=%s", rec.IP, rec.RPCPort, rec.Label)
 	r2, _ := http.NewRequest(http.MethodGet, announceURL, nil)
 	s.tracker.Announce(noopResponseWriter{}, r2)
+=======
+	s.tracker.RegisterNode(tracker.RpcServerInfo{
+		Id:            rec.DeviceID,
+		Ip:            rec.IP,
+		Port:          rec.RPCPort,
+		HardwareModel: rec.Label,
+		MaxSize:       -1,
+		Battery:       math.NaN(),
+		Temperature:   math.NaN(),
+	})
+>>>>>>> 8d0d6f814ae239ab144823bc99aa322cd778f42e
 
 	writeAPIJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }

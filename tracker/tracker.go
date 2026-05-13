@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"math"
 	"net"
@@ -62,12 +63,6 @@ func (t *Tracker) Announce(c *gin.Context) {
 		Interval int `json:"interval"`
 	}
 
-	id, ok := c.GetQuery("id")
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing id"})
-		return
-	}
-
 	port, ok := c.GetQuery("port")
 	if !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing port"})
@@ -80,6 +75,18 @@ func (t *Tracker) Announce(c *gin.Context) {
 		return
 	}
 
+	// use the request's source address if ip is not specified
+	ip, ok := c.GetQuery("ip")
+	if !ok {
+		ip = c.RemoteIP()
+	}
+
+	id, ok := c.GetQuery("id")
+	if !ok {
+		// older clients (e.g. iOS app) don't send id; derive one from ip:port
+		id = fmt.Sprintf("%s:%d", ip, portNum)
+	}
+
 	var storagePort int
 	if storagePortStr, ok := c.GetQuery("storage_port"); ok {
 		storagePort, err = strconv.Atoi(storagePortStr)
@@ -87,12 +94,6 @@ func (t *Tracker) Announce(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid storage_port"})
 			return
 		}
-	}
-
-	// use the request's source address if ip is not specified
-	ip, ok := c.GetQuery("ip")
-	if !ok {
-		ip = c.RemoteIP()
 	}
 
 	hardwareModel := c.Query("model")
@@ -130,63 +131,59 @@ func (t *Tracker) Announce(c *gin.Context) {
 		return
 	}
 
-	clientId := id
-
-	func() {
-		t.Lock()
-		defer t.Unlock()
-		notifyNew := false
-
-		// avoid duplicate timers
-		if existingTimer := t.RpcServers[clientId].expiryTimer; existingTimer != nil {
-			existingTimer.Stop()
-			log.Printf("Reannounce from %s", clientId)
-		} else {
-			notifyNew = true
-			log.Printf("New announce from %s", clientId)
-		}
-
-		announceTime := time.Now()
-
-		serverInfo := RpcServerInfo{
-			Id:            id,
-			LastSeen:      announceTime,
-			Ip:            ip,
-			Port:          portNum,
-			StoragePort:   storagePort,
-			HardwareModel: hardwareModel,
-			MaxSize:       maxSize,
-			Battery:       battery,
-			Temperature:   temperature,
-		}
-
-		t.RpcServers[clientId] = clientInfo{
-			RpcServerInfo: serverInfo,
-			expiryTimer: time.AfterFunc(expiryDuration, func() {
-				t.Lock()
-				defer t.Unlock()
-
-				// there's a possible race condition if the client announces just as the timer expires,
-				// preventing the timer from being stopped. To prevent that, we verify that the last seen time
-				// has not been changed.
-				if t.RpcServers[clientId].LastSeen.Equal(announceTime) {
-					serverInfo := t.RpcServers[clientId].RpcServerInfo
-					delete(t.RpcServers, clientId)
-					t.notifyNodeRemoved(serverInfo)
-					log.Printf("Removed %s from tracker", clientId)
-				}
-			}),
-		}
-
-		if notifyNew {
-			t.notifyNodeAdded(serverInfo)
-		} else {
-			t.notifyNodeUpdated(serverInfo)
-		}
-	}()
+	t.RegisterNode(RpcServerInfo{
+		Id:            id,
+		Ip:            ip,
+		Port:          portNum,
+		StoragePort:   storagePort,
+		HardwareModel: hardwareModel,
+		MaxSize:       maxSize,
+		Battery:       battery,
+		Temperature:   temperature,
+	})
 
 	// respond
 	c.JSON(http.StatusOK, gin.H{"interval": interval.Seconds()})
+}
+
+// RegisterNode registers or refreshes a node in the tracker.
+func (t *Tracker) RegisterNode(info RpcServerInfo) {
+	t.Lock()
+	defer t.Unlock()
+
+	clientId := info.Id
+	notifyNew := false
+
+	if existingTimer := t.RpcServers[clientId].expiryTimer; existingTimer != nil {
+		existingTimer.Stop()
+		log.Printf("Reannounce from %s", clientId)
+	} else {
+		notifyNew = true
+		log.Printf("New announce from %s", clientId)
+	}
+
+	announceTime := time.Now()
+	info.LastSeen = announceTime
+
+	t.RpcServers[clientId] = clientInfo{
+		RpcServerInfo: info,
+		expiryTimer: time.AfterFunc(expiryDuration, func() {
+			t.Lock()
+			defer t.Unlock()
+			if t.RpcServers[clientId].LastSeen.Equal(announceTime) {
+				serverInfo := t.RpcServers[clientId].RpcServerInfo
+				delete(t.RpcServers, clientId)
+				t.notifyNodeRemoved(serverInfo)
+				log.Printf("Removed %s from tracker", clientId)
+			}
+		}),
+	}
+
+	if notifyNew {
+		t.notifyNodeAdded(info)
+	} else {
+		t.notifyNodeUpdated(info)
+	}
 }
 
 func (t *Tracker) ListServers(w http.ResponseWriter, r *http.Request) {

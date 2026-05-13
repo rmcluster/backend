@@ -11,6 +11,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/wk-y/rama-swap/llama"
+	"github.com/wk-y/rama-swap/microservices/dashboard"
+	"github.com/wk-y/rama-swap/microservices/homepage"
 	"github.com/wk-y/rama-swap/microservices/scheduling"
 	"github.com/wk-y/rama-swap/server"
 	"github.com/wk-y/rama-swap/server/gcas"
@@ -77,6 +79,20 @@ func main() {
 		Command: args.Ramalama,
 	}
 
+	if args.Gcasdb == nil {
+		log.Fatalf("No GCAS database specified")
+	}
+
+	gcasdb, err := gcas.OpenDB(*args.Gcasdb)
+	if err != nil {
+		log.Fatalf("Failed to open GCAS database: %v", err)
+	}
+	defer func() {
+		if err := gcasdb.Close(); err != nil {
+			log.Printf("Failed to close GCAS database: %v", err)
+		}
+	}()
+
 	tracker := tracker.NewTracker()
 	tracker.AddRoutes(mux)
 	factory := scheduling.NewInstanceFactory(&ramalama, 49170)
@@ -84,9 +100,15 @@ func main() {
 	if setter, ok := factory.(scheduling.PhaseCallbackSetter); ok {
 		setter.SetPhaseCallback(loadingTracker.OnPhaseUpdate)
 	}
-	scheduler := scheduling.NewPartitioningScheduler(factory, 1)
+	scheduler := scheduling.NewPartitioningScheduler(factory, 3)
 	tracker.Subscribe(schedulersubscriber.NewSchedulerSubscriber(scheduler))
+	cas := gcas.NewGCAS(gcasdb)
+	tracker.Subscribe(gcassubscriber.NewGCASSubscriber(cas))
 	server := server.NewServer(ramalama, scheduler, loadingTracker)
+	dashboard := dashboard.NewDashboard(tracker)
+	dashboard.RegisterHandlers(mux)
+	homepage := homepage.NewHomepage()
+	homepage.RegisterHandlers(mux)
 	ui := uiapi.New(tracker, ramalama)
 	ui.RegisterHandlers(mux)
 
