@@ -43,6 +43,7 @@ func NewPartitioningScheduler(instanceFactory InstanceFactory, parallelismTarget
 		newTasksChan:       make(chan Task, 16),
 		nodeConnectChan:    make(chan Node, 16),
 		nodeDisconnectChan: make(chan Node, 16),
+		nodeEventChan:      make(chan NodeEvent, 16),
 		taskCancelledChan:  make(chan Task, 16),
 		taskCompletedChan:  make(chan TaskCompletionMessage, 16),
 		parallelismTarget:  parallelismTarget,
