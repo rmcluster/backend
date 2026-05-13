@@ -93,22 +93,23 @@ func main() {
 		}
 	}()
 
-	tracker := tracker.NewTracker()
+	rpcTracker := tracker.NewTracker()
+	tracker.DefaultTracker = rpcTracker
 	factory := scheduling.NewInstanceFactory(&ramalama, 49170)
 	loadingTracker := &scheduling.LoadingStatusTracker{}
 	if setter, ok := factory.(scheduling.PhaseCallbackSetter); ok {
 		setter.SetPhaseCallback(loadingTracker.OnPhaseUpdate)
 	}
 	scheduler := scheduling.NewPartitioningScheduler(factory, 3)
-	tracker.Subscribe(schedulersubscriber.NewSchedulerSubscriber(scheduler))
+	rpcTracker.Subscribe(schedulersubscriber.NewSchedulerSubscriber(scheduler))
 	cas := gcas.NewGCAS(gcasdb)
-	tracker.Subscribe(gcassubscriber.NewGCASSubscriber(cas))
+	rpcTracker.Subscribe(gcassubscriber.NewGCASSubscriber(cas))
 	server := server.NewServer(ramalama, scheduler, loadingTracker)
-	dashboard := dashboard.NewDashboard(tracker)
+	dashboard := dashboard.NewDashboard(rpcTracker)
 	dashboard.RegisterHandlers(mux)
 	homepage := homepage.NewHomepage()
 	homepage.RegisterHandlers(mux)
-	ui := uiapi.New(tracker, ramalama)
+	ui := uiapi.New(rpcTracker, ramalama)
 	ui.RegisterHandlers(mux)
 
 	server.ModelNameMangler = func(s string) string {
@@ -125,7 +126,7 @@ func main() {
 	defer l.Close()
 
 	server.HandleHttp(mux)
-	err = http.Serve(l, requestLogger(corsMiddleware(mux)))
+	err = http.Serve(l, requestLogger(corsMiddleware(router)))
 
 	log.Fatalf("Failed to serve: %v", err)
 }
