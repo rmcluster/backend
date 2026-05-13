@@ -168,15 +168,18 @@ func (s *StorageServiceImpl) Mkdir(ctx context.Context, name string, perm os.Fil
 
 // OpenFile implements [StorageService].
 func (s *StorageServiceImpl) OpenFile(ctx context.Context, name string, flag int, perm os.FileMode) (webdav.File, error) {
-	const writeMask = os.O_WRONLY | os.O_CREATE | os.O_TRUNC | os.O_EXCL
-	const required = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	const writeMask = os.O_WRONLY | os.O_RDWR | os.O_CREATE | os.O_TRUNC | os.O_EXCL
+	const writeRequired = os.O_CREATE | os.O_TRUNC
 
-	if flag&os.O_APPEND != 0 || flag&os.O_RDWR != 0 {
+	if flag&os.O_APPEND != 0 {
 		return nil, fmt.Errorf("unsupported open flags: %#o", flag)
 	}
 
-	if flag&(os.O_WRONLY|os.O_CREATE|os.O_TRUNC) != 0 {
-		if flag & ^writeMask != 0 || flag&required != required {
+	if flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE|os.O_TRUNC) != 0 {
+		if flag & ^writeMask != 0 || flag&writeRequired != writeRequired {
+			return nil, fmt.Errorf("unsupported open flags %#o", flag)
+		}
+		if flag&(os.O_WRONLY|os.O_RDWR) == 0 {
 			return nil, fmt.Errorf("unsupported open flags %#o", flag)
 		}
 		return s.openWrite(ctx, name, perm, flag&os.O_EXCL != 0)
