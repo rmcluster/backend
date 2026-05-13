@@ -94,7 +94,6 @@ func main() {
 	}()
 
 	tracker := tracker.NewTracker()
-	tracker.AddRoutes(mux)
 	factory := scheduling.NewInstanceFactory(&ramalama, 49170)
 	loadingTracker := &scheduling.LoadingStatusTracker{}
 	if setter, ok := factory.(scheduling.PhaseCallbackSetter); ok {

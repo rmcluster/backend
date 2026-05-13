@@ -75,6 +75,8 @@ type PartitioningScheduler struct {
 
 	// channels for the different notification types
 	newTasksChan      chan Task
+	nodeConnectChan   chan Node
+	nodeDisconnectChan chan Node
 	nodeEventChan     chan NodeEvent
 	taskCancelledChan chan Task
 	taskCompletedChan chan TaskCompletionMessage
@@ -142,19 +144,11 @@ taskHandlerLoop:
 			task = s.modelQueues[highestScoringQueue][0].task
 			s.modelQueues[highestScoringQueue] = s.modelQueues[highestScoringQueue][1:]
 		} else { // wait for a task to arrive
-<<<<<<< HEAD
 		awaitTaskLoop:
 			for {
 				select {
 				case task = <-s.newTasksChan:
 					break awaitTaskLoop
-=======
-		taskWaitLoop:
-			for {
-				select {
-				case task = <-s.newTasksChan:
-					break taskWaitLoop
->>>>>>> 3131dac (Try to get frontend UI and server-node connection working)
 				case taskCompletionMessage := <-s.taskCompletedChan:
 					s.handleTaskCompletion(taskCompletionMessage)
 				case nodeEvent := <-s.nodeEventChan:
