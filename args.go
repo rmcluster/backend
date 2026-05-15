@@ -13,6 +13,7 @@ import (
 
 type args struct {
 	Gcasdb      *string
+	Storagedb   *string
 	Ramalama    []string
 	Port        *int
 	Host        *string
@@ -28,6 +29,19 @@ func parseArgs(cli []string) (a args, rest []string, err error) {
 		case "-h", "-help", "--help":
 			printHelp(commandName)
 			os.Exit(0)
+
+		case "-storagedb":
+			if a.Storagedb != nil {
+				return args{}, nil, fmt.Errorf("%s may only be passed at most once", cli[0])
+			}
+
+			if len(cli) < 2 {
+				return args{}, nil, fmt.Errorf("expected path to storage database after %s", cli[0])
+			}
+
+			a.Storagedb = &cli[1]
+
+			cli = cli[2:]
 
 		case "-ramalama":
 			if a.Ramalama != nil {

@@ -19,6 +19,7 @@ import (
 	gcassubscriber "github.com/wk-y/rama-swap/server/gcas_subscriber"
 	"github.com/wk-y/rama-swap/server/openapi"
 	schedulersubscriber "github.com/wk-y/rama-swap/server/scheduler_subscriber"
+	"github.com/wk-y/rama-swap/server/storage"
 	"github.com/wk-y/rama-swap/tracker"
 )
 
@@ -72,6 +73,25 @@ func main() {
 	dashboard.RegisterHandlers(mux)
 	homepage := homepage.NewHomepage()
 	homepage.RegisterHandlers(mux)
+
+	if args.Storagedb == nil {
+		log.Fatalf("No storage database specified")
+	}
+	storagedb, err := storage.OpenDB(*args.Storagedb, 1)
+	if err != nil {
+		log.Fatalf("Failed to open storage database: %v", err)
+	}
+	defer func() {
+		if err := storagedb.Close(); err != nil {
+			log.Printf("Failed to close storage database: %v", err)
+		}
+	}()
+	storageSvc, err := storage.NewStorageService(storagedb, cas)
+	if err != nil {
+		log.Fatalf("Failed to create storage service: %v", err)
+	}
+	webdavService := webdavservice.NewWebDavService(storageSvc)
+	webdavService.RegisterGinHandlers(router)
 
 	server.ModelNameMangler = func(s string) string {
 		return strings.ReplaceAll(s, "/", "_")
