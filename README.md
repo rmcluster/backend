@@ -12,12 +12,10 @@ go run .
 
 The long-term frontend is now being moved to React/Vite under [frontend](frontend).
 
-The current server-rendered pages remain available for transition and fallback. The main pages are:
+The current server-rendered pages remain available for transition and fallback. The currently available pages are:
 
 - `/` for the landing page and navigation
 - `/dashboard` for connected device status
-- `/models` for model selection
-- `/chat` for the streaming chat interface
 
 For the new frontend, run the React dev server in [frontend](frontend) and point it at the API routes under `/api/ui`.
 

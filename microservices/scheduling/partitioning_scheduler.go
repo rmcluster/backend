@@ -46,6 +46,7 @@ func NewPartitioningScheduler(instanceFactory InstanceFactory, parallelismTarget
 		nodeEventChan:      make(chan NodeEvent, 16),
 		taskCancelledChan:  make(chan Task, 16),
 		taskCompletedChan:  make(chan TaskCompletionMessage, 16),
+		instanceDeadChan:   make(chan instanceInfo, 16),
 		parallelismTarget:  parallelismTarget,
 		idleBias:           10 * time.Second,
 	}
@@ -247,6 +248,9 @@ taskHandlerLoop:
 		instance, err := s.instanceFactory.StartInstance(task.Model(), nodes)
 		if err != nil {
 			log.Printf("Failed to create instance: %v", err)
+			if f, ok := task.(interface{ Fail(error) }); ok {
+				f.Fail(err)
+			}
 			continue
 		}
 
@@ -277,6 +281,9 @@ taskHandlerLoop:
 			}()
 			if err := instanceInfo.instance.WaitReady(); err != nil {
 				log.Printf("Failed to wait for instance to be ready: %v", err)
+				if f, ok := task.(interface{ Fail(error) }); ok {
+					f.Fail(err)
+				}
 				return
 			}
 			task.PerformInference(instanceInfo.instance)

@@ -15,9 +15,15 @@ type LoadingStatusTracker struct {
 // OnPhaseUpdate is used as the SetPhaseCallback target on an InstanceFactory.
 func (t *LoadingStatusTracker) OnPhaseUpdate(model, phase string, progress float64) {
 	t.mu.Lock()
-	t.model = model
-	t.phase = phase
-	t.progress = progress
+	if phase == PhaseReady {
+		t.model = ""
+		t.phase = ""
+		t.progress = 0
+	} else {
+		t.model = model
+		t.phase = phase
+		t.progress = progress
+	}
 	t.mu.Unlock()
 }
 

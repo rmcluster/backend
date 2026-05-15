@@ -84,6 +84,7 @@ type deviceRegisterRequest struct {
 	IP       string `json:"ip"`
 	RPCPort  int    `json:"rpc_port"`
 	Token    string `json:"token"`
+	MaxSize  int64  `json:"max_size,omitempty"` // bytes; 0 or omitted means unknown
 }
 
 // ---- Chat session types ----
@@ -168,7 +169,7 @@ func (s *UIApi) handleAPIDeviceRegister(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if strings.TrimSpace(req.DeviceID) == "" || strings.TrimSpace(req.IP) == "" || req.RPCPort <= 0 {
+	if strings.TrimSpace(req.DeviceID) == "" || strings.TrimSpace(req.IP) == "" || req.RPCPort <= 0 || req.RPCPort > 65535 {
 		writeAPIError(w, http.StatusBadRequest, "missing device_id, ip, or rpc_port")
 		return
 	}
@@ -181,6 +182,11 @@ func (s *UIApi) handleAPIDeviceRegister(w http.ResponseWriter, r *http.Request) 
 	if !s.consumeConnectToken(strings.TrimSpace(req.Token)) {
 		writeAPIError(w, http.StatusUnauthorized, "invalid or expired token")
 		return
+	}
+
+	maxSize := req.MaxSize
+	if maxSize <= 0 {
+		maxSize = -1 // unknown
 	}
 
 	now := time.Now()
@@ -202,7 +208,7 @@ func (s *UIApi) handleAPIDeviceRegister(w http.ResponseWriter, r *http.Request) 
 		Ip:            rec.IP,
 		Port:          rec.RPCPort,
 		HardwareModel: rec.Label,
-		MaxSize:       -1,
+		MaxSize:       maxSize,
 		Battery:       math.NaN(),
 		Temperature:   math.NaN(),
 	})
@@ -290,6 +296,11 @@ func (s *UIApi) handleAPIStartChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.chatLock.Lock()
+	if _, exists := s.chatSessions[req.ChatID]; !exists && len(s.chatSessions) >= 500 {
+		s.chatLock.Unlock()
+		writeAPIError(w, http.StatusTooManyRequests, "chat session limit reached")
+		return
+	}
 	s.chatSessions[req.ChatID] = session
 	s.chatLock.Unlock()
 
@@ -344,9 +355,26 @@ func (s *UIApi) appendChatEvent(w http.ResponseWriter, r *http.Request, chatID s
 		return
 	}
 
+	validEventTypes := map[string]struct{}{
+		"message_sent": {}, "token_received": {}, "message_completed": {},
+		"stream_error": {}, "chat_closed": {},
+	}
+	if _, ok := validEventTypes[req.EventType]; !ok {
+		writeAPIError(w, http.StatusBadRequest, "invalid event_type")
+		return
+	}
+
+	const maxSessions = 500
+	const maxEventsPerSession = 1000
+
 	s.chatLock.Lock()
 	session, ok := s.chatSessions[chatID]
 	if !ok {
+		if len(s.chatSessions) >= maxSessions {
+			s.chatLock.Unlock()
+			writeAPIError(w, http.StatusTooManyRequests, "chat session limit reached")
+			return
+		}
 		// Auto-create a minimal session for clients that skipped POST /api/ui/chats
 		// (e.g. after a server restart when in-memory sessions were lost).
 		session = chatSessionRecord{
@@ -354,6 +382,11 @@ func (s *UIApi) appendChatEvent(w http.ResponseWriter, r *http.Request, chatID s
 			StartedAt: time.Now().Format(time.RFC3339),
 			Status:    "active",
 		}
+	}
+	if len(session.Events) >= maxEventsPerSession {
+		s.chatLock.Unlock()
+		writeAPIError(w, http.StatusUnprocessableEntity, "event limit reached for this session")
+		return
 	}
 	seq := len(session.Events) + 1
 	session.Events = append(session.Events, chatEvent{chatEventRequest: req, Sequence: seq})
@@ -607,8 +640,13 @@ func (s *UIApi) handleAPIAddHFModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if hfStore != nil {
-		_ = hfStore.AddCustomModel(entry)
+	if hfStore == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "metadata store unavailable")
+		return
+	}
+	if err := hfStore.AddCustomModel(entry); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "failed to persist model")
+		return
 	}
 
 	writeAPIJSON(w, http.StatusCreated, apiModel{
@@ -626,6 +664,8 @@ func (s *UIApi) handleAPILocalModelUpload(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	const maxUploadBytes = 50 << 30 // 50 GiB
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
 	if err := r.ParseMultipartForm(64 << 20); err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
@@ -644,8 +684,13 @@ func (s *UIApi) handleAPILocalModelUpload(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if hfStore != nil {
-		_ = hfStore.AddCustomModel(entry)
+	if hfStore == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "metadata store unavailable")
+		return
+	}
+	if err := hfStore.AddCustomModel(entry); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "failed to persist model")
+		return
 	}
 
 	writeAPIJSON(w, http.StatusCreated, apiModel{
@@ -715,10 +760,27 @@ func uploadLocalModel(r *http.Request, file multipart.File, header *multipart.Fi
 		return customModelEntry{}, err
 	}
 
-	destinationPath := uniqueStoragePath(storageDir, filepath.Base(header.Filename))
-	destination, err := os.Create(destinationPath)
-	if err != nil {
-		return customModelEntry{}, err
+	baseName := filepath.Base(header.Filename)
+	ext := filepath.Ext(baseName)
+	stem := strings.TrimSuffix(baseName, ext)
+	var (
+		destinationPath string
+		destination     *os.File
+		err             error
+	)
+	for i := 0; ; i++ {
+		candidate := baseName
+		if i > 0 {
+			candidate = fmt.Sprintf("%s-%d%s", stem, i, ext)
+		}
+		destinationPath = filepath.Join(storageDir, candidate)
+		destination, err = os.OpenFile(destinationPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err == nil {
+			break
+		}
+		if !os.IsExist(err) {
+			return customModelEntry{}, err
+		}
 	}
 
 	if _, err := io.Copy(destination, file); err != nil {

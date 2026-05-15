@@ -8,6 +8,7 @@ const (
 	PhaseDownloading LoadingPhase = "downloading"
 	PhaseLoading     LoadingPhase = "loading_model"
 	PhaseWarmingUp   LoadingPhase = "warming_up"
+	PhaseReady       LoadingPhase = "ready"
 )
 
 // LoadingStatusProvider is optionally implemented by a Scheduler to expose

@@ -125,14 +125,14 @@ func chooseOffloadLayers(nodes []Node) int {
 	for _, node := range nodes {
 		maxSize := node.MaxSize()
 		if maxSize <= 0 {
-			return 0
+			continue
 		}
 		if smallestMaxSize < 0 || maxSize < smallestMaxSize {
 			smallestMaxSize = maxSize
 		}
 	}
 
-	if smallestMaxSize < minRemoteBufferBytes {
+	if smallestMaxSize < 0 || smallestMaxSize < minRemoteBufferBytes {
 		return 0
 	}
 
@@ -209,6 +209,8 @@ func makePhaseDetector(model string, cb func(model, phase string, progress float
 			cb(model, PhaseLoading, 0)
 		case strings.Contains(line, "warming up"):
 			cb(model, PhaseWarmingUp, 0)
+		case strings.Contains(line, "server is listening"):
+			cb(model, PhaseReady, 0)
 		}
 	}
 }

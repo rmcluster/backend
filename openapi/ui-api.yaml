@@ -90,6 +90,19 @@ paths:
         '404':
           $ref: '#/components/responses/Error'
 
+  /api/ui/loading-status:
+    get:
+      tags: [ui]
+      summary: Get current model loading phase and progress
+      operationId: getLoadingStatus
+      responses:
+        '200':
+          description: Current loading state (empty model/phase when idle)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoadingStatus'
+
   /api/ui/dashboard:
     get:
       tags: [devices]
@@ -245,6 +258,7 @@ paths:
     post:
       tags: [chat]
       summary: Append sent/received/error event for a chat
+      description: Auto-creates a minimal session if the chat_id is unknown.
       operationId: appendChatEvent
       parameters:
         - $ref: '#/components/parameters/ChatId'
@@ -262,8 +276,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/StatusAccepted'
         '400':
-          $ref: '#/components/responses/Error'
-        '404':
           $ref: '#/components/responses/Error'
 
   /api/ui/chats/{chat_id}:
@@ -315,6 +327,21 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
 
   schemas:
+    LoadingStatus:
+      type: object
+      required: [model, phase, progress]
+      properties:
+        model:
+          type: string
+          description: Model currently loading; empty when idle
+        phase:
+          type: string
+          enum: [starting, downloading, loading_model, warming_up, '']
+          description: Current phase; empty when idle
+        progress:
+          type: number
+          description: Download progress 0–100; meaningful only when phase=downloading
+
     UiApiRoot:
       type: object
       required: [models, search, dashboard, connect]
@@ -371,6 +398,10 @@ components:
           maximum: 65535
         token:
           type: string
+        max_size:
+          type: integer
+          format: int64
+          description: Device RAM available for model layers in bytes; omit if unknown
 
     RegisterDeviceResponse:
       type: object
@@ -385,8 +416,10 @@ components:
 
     DashboardServer:
       type: object
-      required: [ip, port, hardware_model]
+      required: [id, ip, port, hardware_model]
       properties:
+        id:
+          type: string
         ip:
           type: string
           format: ipv4

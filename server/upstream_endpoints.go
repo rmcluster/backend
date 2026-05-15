@@ -24,7 +24,7 @@ func (s *Server) serveUpstream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveUpstreamSelect(w http.ResponseWriter, r *http.Request) {
-	http.Redirect(w, r, "/models", http.StatusSeeOther)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func (s *Server) demangle(name string) (string, error) {

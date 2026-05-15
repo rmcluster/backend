@@ -98,6 +98,7 @@ func main() {
 		router.Any(prefix+"/*path", gin.WrapH(mux))
 		router.Any(prefix, gin.WrapH(mux))
 	}
+	router.Any("/", gin.WrapH(mux))
 
 	ramalama := llama.Llama{
 		Command: args.Ramalama,
