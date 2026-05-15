@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 
 	"github.com/wk-y/rama-swap/llama"
 	"github.com/wk-y/rama-swap/microservices/dashboard"
@@ -25,12 +26,33 @@ import (
 
 const EX_USAGE = 64
 
-// corsMiddleware wraps an http.Handler to add CORS headers for development
+func allowedCORSOrigins() map[string]struct{} {
+	origins := make(map[string]struct{})
+	for _, origin := range strings.Split(os.Getenv("CORS_ALLOWED_ORIGINS"), ",") {
+		origin = strings.TrimSpace(origin)
+		if origin != "" {
+			origins[origin] = struct{}{}
+		}
+	}
+	return origins
+}
+
+// corsMiddleware adds CORS headers for origins listed in CORS_ALLOWED_ORIGINS (comma-separated).
 func corsMiddleware(handler http.Handler) http.Handler {
+	allowed := allowedCORSOrigins()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE, PUT")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept")
+		origin := strings.TrimSpace(r.Header.Get("Origin"))
+		if origin != "" {
+			if _, ok := allowed[origin]; ok {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Vary", "Origin")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE, PUT")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept")
+			} else if r.Method == http.MethodOptions {
+				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				return
+			}
+		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -48,6 +70,8 @@ func requestLogger(handler http.Handler) http.Handler {
 }
 
 func main() {
+	_ = godotenv.Load()
+
 	args, rest, err := parseArgs(os.Args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", os.Args[0], err)
