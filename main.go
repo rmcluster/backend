@@ -10,11 +10,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"golang.org/x/net/webdav"
 
 	"github.com/wk-y/rama-swap/llama"
 	"github.com/wk-y/rama-swap/microservices/dashboard"
 	"github.com/wk-y/rama-swap/microservices/homepage"
 	"github.com/wk-y/rama-swap/microservices/scheduling"
+	"github.com/wk-y/rama-swap/microservices/webdavservice"
 	"github.com/wk-y/rama-swap/server"
 	"github.com/wk-y/rama-swap/server/gcas"
 	gcassubscriber "github.com/wk-y/rama-swap/server/gcas_subscriber"
@@ -136,6 +138,8 @@ func main() {
 	homepage.RegisterHandlers(mux)
 	ui := uiapi.New(rpcTracker, ramalama)
 	ui.RegisterHandlers(mux)
+	webdavService := webdavservice.NewWebDavService(webdav.NewMemFS())
+	webdavService.RegisterGinHandlers(router)
 
 	server.ModelNameMangler = func(s string) string {
 		return strings.ReplaceAll(s, "/", "_")
