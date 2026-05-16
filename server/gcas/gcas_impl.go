@@ -143,38 +143,45 @@ func (g *GcasImpl) Get(ctx context.Context, hash Hash) ([]byte, error) {
 
 // List implements [CAS].
 func (g *GcasImpl) List(ctx context.Context) (<-chan Hash, error) {
-	visited := make(map[Hash]struct{})
-	ch := make(chan Hash)
-	// the list of nodes might change while we are iterating over it.
-	// holding the lock while iterating could result in a deadlock if the channel is not drained.
-	// thus we copy the list of nodes first, accepting that the list might not be up to date.
-	g.nodesLock.RLock()
-	nodes := make([]CAS, 0, len(g.nodes))
-	for _, node := range g.nodes {
-		nodes = append(nodes, node)
+	// select all data chunks from the database
+	// no need to hold locks as List is best-effort
+	rows, err := g.db.QueryContext(ctx, "SELECT hash FROM chunks")
+	if err != nil {
+		return nil, err
 	}
-	g.nodesLock.RUnlock()
+
+	ch := make(chan Hash)
 
 	go func() {
 		defer close(ch)
-		for _, node := range nodes {
-			hashes, err := node.List(ctx)
+		defer rows.Close()
+
+		for rows.Next() {
+			var h []byte
+			err := rows.Scan(&h)
+
+			if len(h) != len(Hash{}) {
+				log.Printf("List: Invalid hash length %d (expected %d)", len(h), len(Hash{}))
+				// treat as non-fatal error, continue to next row
+				continue
+			}
+
 			if err != nil {
+				log.Printf("List: Error scanning hash: %v", err)
 				return
 			}
-			for hash := range hashes {
-				if _, ok := visited[hash]; ok {
-					continue
-				}
-				visited[hash] = struct{}{}
-				select {
-				case ch <- hash:
-				case <-ctx.Done():
-					return
-				}
+
+			var hash Hash
+			copy(hash[:], h)
+
+			select {
+			case ch <- hash:
+			case <-ctx.Done():
+				return
 			}
 		}
 	}()
+
 	return ch, nil
 }
 

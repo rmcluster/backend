@@ -331,9 +331,9 @@ func TestGCASList(t *testing.T) {
 	}
 }
 
-// TestGCASListDeduplication verifies that a hash present on multiple nodes is returned
-// only once by GCAS.List.
-func TestGCASListDeduplication(t *testing.T) {
+// TestGCASInternalList verifies that GCAS uses its own database to look up hashes,
+// and does not rely on the accuracy of the nodes' lists
+func TestGCASInternalList(t *testing.T) {
 	gcas, db, err := createTestGCAS(0)
 	if err != nil {
 		t.Fatal(err)
@@ -345,8 +345,14 @@ func TestGCASListDeduplication(t *testing.T) {
 
 	data := []byte("shared")
 	hash := sha256.Sum256(data)
-	node0.DirectPut(hash, data)
-	node1.DirectPut(hash, data)
+
+	// directly insert hash into nodes, should not be listed
+	if err := node0.Put(context.Background(), hash, data); err != nil {
+		t.Fatal(err)
+	}
+	if err := node1.Put(context.Background(), hash, data); err != nil {
+		t.Fatal(err)
+	}
 
 	gcas.AddNode(node0)
 	gcas.AddNode(node1)
@@ -359,8 +365,25 @@ func TestGCASListDeduplication(t *testing.T) {
 	for range ch {
 		count++
 	}
+	if count != 0 {
+		t.Errorf("expected empty list, got %d elements", count)
+	}
+
+	// now put hash through gcas and check that it's listed
+	if err := gcas.Put(context.Background(), hash, data); err != nil {
+		t.Fatal(err)
+	}
+
+	ch, err = gcas.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	count = 0
+	for range ch {
+		count++
+	}
 	if count != 1 {
-		t.Errorf("expected 1 deduplicated hash, got %d", count)
+		t.Errorf("expected 1 hash, got %d", count)
 	}
 }
 
