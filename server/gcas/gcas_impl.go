@@ -238,7 +238,9 @@ func (g *GcasImpl) Put(ctx context.Context, hash Hash, data []byte) error {
 
 	err := node.cas.Put(ctx, hash, data)
 
-	if err != nil {
+	// if the node already has the chunk, we are still successfully adding it to the GCAS.
+	// thus only return errors that are not HashExistsError
+	if err != nil && !errors.Is(err, HashExistsError{}) {
 		return err
 	}
 
