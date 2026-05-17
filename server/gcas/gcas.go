@@ -11,6 +11,7 @@ type GCAS interface {
 	RemoveNode(nodeName string)
 	ReplaceNode(node NamedCAS) // replaces the node with the same name with the new node
 	RunMaintenance(ctx context.Context) error
+	Repair(ctx context.Context) error
 }
 
 type NamedCAS interface {
