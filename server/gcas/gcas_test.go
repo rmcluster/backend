@@ -690,14 +690,18 @@ func TestGCASRunMaintenance(t *testing.T) {
 }
 
 func createTestGCAS(numNodes int) (GCAS, *sql.DB, error) {
-	db, err := OpenDB(":memory:")
-	gcas := NewGCAS(db)
+	return createTestGCASWithDataShards(numNodes, defaultDataShards)
+}
 
+func createTestGCASWithDataShards(numNodes, dataShards int) (GCAS, *sql.DB, error) {
+	db, err := OpenDB(":memory:")
 	if err != nil {
 		return nil, nil, err
 	}
 
-	nodes := make([]NamedCAS, numNodes)
+	gcas := NewGCASWithDataShards(db, dataShards)
+
+	nodes := make([]*mockCAS, numNodes)
 	for i := 0; i < numNodes; i++ {
 		nodes[i] = NewMockCAS(fmt.Sprintf("node%d", i))
 	}
@@ -707,4 +711,250 @@ func createTestGCAS(numNodes int) (GCAS, *sql.DB, error) {
 	}
 
 	return gcas, db, nil
+}
+
+// testPutToNode directly places a chunk on a specific node, bypassing Put's random
+// assignment. Used by EC tests to guarantee deterministic stripe layout.
+func testPutToNode(t *testing.T, db *sql.DB, nodes map[string]*mockCAS, nodeID string, hash Hash, data []byte) {
+	t.Helper()
+	if err := nodes[nodeID].Put(context.Background(), hash, data); err != nil && !errors.Is(err, HashExistsError{}) {
+		t.Fatalf("testPutToNode %s: %v", nodeID, err)
+	}
+	if _, err := db.Exec("INSERT OR IGNORE INTO chunks (hash, size, node_id) VALUES (?, ?, ?)", hash[:], len(data), nodeID); err != nil {
+		t.Fatalf("testPutToNode DB insert: %v", err)
+	}
+}
+
+// testSetupStripe places k chunks on nodes 0..k-1 deterministically and runs
+// maintenance to form a stripe. Returns the k data hashes.
+func testSetupStripe(t *testing.T, gcas GCAS, db *sql.DB, nodes map[string]*mockCAS, k int) []Hash {
+	t.Helper()
+	hashes := make([]Hash, k)
+	for i := 0; i < k; i++ {
+		data := []byte(fmt.Sprintf("stripe-data-%d", i))
+		h := sha256.Sum256(data)
+		hashes[i] = h
+		testPutToNode(t, db, nodes, fmt.Sprintf("node%d", i), h, data)
+	}
+	if err := gcas.RunMaintenance(context.Background()); err != nil {
+		t.Fatalf("RunMaintenance: %v", err)
+	}
+	return hashes
+}
+
+// TestGCASErasureCoding verifies that maintenance forms an erasure group when
+// enough distinct-node chunks exist.
+func TestGCASErasureCoding(t *testing.T) {
+	const k = 2
+	gcas, db, nodes := createTestGCASWithNodes(t, k+parityShards, k)
+	defer db.Close()
+
+	testSetupStripe(t, gcas, db, nodes, k)
+
+	var groupCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM erasure_group").Scan(&groupCount); err != nil {
+		t.Fatal(err)
+	}
+	if groupCount != 1 {
+		t.Errorf("expected 1 erasure group, got %d", groupCount)
+	}
+
+	var memberCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM erasure_group_member").Scan(&memberCount); err != nil {
+		t.Fatal(err)
+	}
+	if memberCount != k+parityShards {
+		t.Errorf("expected %d erasure group members, got %d", k+parityShards, memberCount)
+	}
+}
+
+// TestGCASStripeNodeConstraint verifies that no two stripe members share a node.
+func TestGCASStripeNodeConstraint(t *testing.T) {
+	const k = 2
+	gcas, db, nodes := createTestGCASWithNodes(t, k+parityShards, k)
+	defer db.Close()
+
+	testSetupStripe(t, gcas, db, nodes, k)
+
+	rows, err := db.Query(`
+		SELECT c.node_id FROM erasure_group_member egm
+		JOIN chunks c ON c.hash = egm.hash_id
+		WHERE egm.erasure_group_id = 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	seen := make(map[string]bool)
+	for rows.Next() {
+		var nodeID string
+		if err := rows.Scan(&nodeID); err != nil {
+			t.Fatal(err)
+		}
+		if seen[nodeID] {
+			t.Errorf("node %s appears more than once in the stripe", nodeID)
+		}
+		seen[nodeID] = true
+	}
+}
+
+// TestGCASGetNodeFailure verifies that Get succeeds via EC recovery when a
+// single node holding a data chunk is removed.
+func TestGCASGetNodeFailure(t *testing.T) {
+	const k = 2
+	gcas, db, nodes := createTestGCASWithNodes(t, k+parityShards, k)
+	defer db.Close()
+
+	hashes := testSetupStripe(t, gcas, db, nodes, k)
+
+	// hashes[0] is on node0 (deterministic placement)
+	gcas.RemoveNode("node0")
+
+	// Get should recover via EC
+	data, err := gcas.Get(context.Background(), hashes[0])
+	if err != nil {
+		t.Errorf("expected EC recovery to succeed, got: %v", err)
+	}
+	expected := []byte("stripe-data-0")
+	if string(data) != string(expected) {
+		t.Errorf("recovered data mismatch: got %q, want %q", data, expected)
+	}
+}
+
+// TestGCASGetTwoNodeFailure verifies EC recovery with 2 nodes down (maximum
+// tolerable for 2 parity shards).
+func TestGCASGetTwoNodeFailure(t *testing.T) {
+	const k = 2
+	gcas, db, nodes := createTestGCASWithNodes(t, k+parityShards, k)
+	defer db.Close()
+
+	hashes := testSetupStripe(t, gcas, db, nodes, k)
+
+	// Remove both data nodes (node0 and node1); only the 2 parity nodes survive
+	gcas.RemoveNode("node0")
+	gcas.RemoveNode("node1")
+
+	// With k=2 data shards and 2 parity shards, losing 2 shards is still recoverable
+	data, err := gcas.Get(context.Background(), hashes[0])
+	if err != nil {
+		t.Errorf("expected EC recovery with 2 node failures, got: %v", err)
+	}
+	expected := []byte("stripe-data-0")
+	if string(data) != string(expected) {
+		t.Errorf("recovered data mismatch: got %q, want %q", data, expected)
+	}
+}
+
+// TestGCASGetUnrecoverableFailure verifies that Get fails when more nodes are
+// down than the parity count allows.
+func TestGCASGetUnrecoverableFailure(t *testing.T) {
+	const k = 2
+	gcas, db, nodes := createTestGCASWithNodes(t, k+parityShards, k)
+	defer db.Close()
+
+	hashes := testSetupStripe(t, gcas, db, nodes, k)
+
+	// Remove all 4 stripe nodes — 0 shards survive, need k=2 for recovery
+	rows, err := db.Query(`
+		SELECT DISTINCT c.node_id FROM erasure_group_member egm
+		JOIN chunks c ON c.hash = egm.hash_id
+		WHERE egm.erasure_group_id = 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var toRemove []string
+	for rows.Next() {
+		var n string
+		rows.Scan(&n)
+		toRemove = append(toRemove, n)
+	}
+	rows.Close()
+	for _, n := range toRemove {
+		gcas.RemoveNode(n)
+	}
+
+	_, err = gcas.Get(context.Background(), hashes[0])
+	if err == nil {
+		t.Error("expected Get to fail with all nodes down, got nil")
+	}
+}
+
+// TestGCASRepairAndGet removes a node, runs Repair, and verifies Get succeeds
+// without the original node.
+func TestGCASRepairAndGet(t *testing.T) {
+	const k = 2
+	// k+parityShards nodes for the stripe + 1 spare so Repair has a node to place recovered shard
+	gcas, db, nodes := createTestGCASWithNodes(t, k+parityShards+1, k)
+	defer db.Close()
+
+	hashes := testSetupStripe(t, gcas, db, nodes, k)
+
+	// hashes[0] is on node0 (deterministic placement); remove it
+	gcas.RemoveNode("node0")
+
+	// Before repair: Get should fail (primary node gone, EC recovery still works but
+	// after repair the shard is placed on the spare node and Get uses the direct path)
+	// Run repair to restore the shard to the spare node
+	if err := gcas.Repair(context.Background()); err != nil {
+		t.Fatalf("Repair: %v", err)
+	}
+
+	// After repair, Get should succeed even without node0
+	data, err := gcas.Get(context.Background(), hashes[0])
+	if err != nil {
+		t.Errorf("expected Get to succeed after Repair, got: %v", err)
+	}
+	expected := []byte("stripe-data-0")
+	if string(data) != string(expected) {
+		t.Errorf("data mismatch after repair: got %q, want %q", data, expected)
+	}
+}
+
+// TestGCASRepairCorruptData verifies that Repair restores a shard whose data
+// has been corrupted on the node.
+func TestGCASRepairCorruptData(t *testing.T) {
+	const k = 2
+	// +1 spare node so Repair can place the recovered shard somewhere other than the corrupt node
+	gcas, db, nodes := createTestGCASWithNodes(t, k+parityShards+1, k)
+	defer db.Close()
+
+	hashes := testSetupStripe(t, gcas, db, nodes, k)
+
+	// Corrupt data for hashes[0] on node0 (deterministic placement)
+	nodes["node0"].CorruptData(hashes[0])
+
+	// Repair should reconstruct hashes[0] onto the spare node
+	if err := gcas.Repair(context.Background()); err != nil {
+		t.Fatalf("Repair: %v", err)
+	}
+
+	// After repair, Get should return correct data
+	data, err := gcas.Get(context.Background(), hashes[0])
+	if err != nil {
+		t.Errorf("expected Get to succeed after Repair, got: %v", err)
+	}
+	expected := []byte("stripe-data-0")
+	if string(data) != string(expected) {
+		t.Errorf("data mismatch after repair: got %q, want %q", data, expected)
+	}
+}
+
+// createTestGCASWithNodes is like createTestGCASWithDataShards but returns the
+// node map so tests can corrupt or inspect individual nodes.
+func createTestGCASWithNodes(t *testing.T, numNodes, dataShards int) (GCAS, *sql.DB, map[string]*mockCAS) {
+	t.Helper()
+	db, err := OpenDB(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gcas := NewGCASWithDataShards(db, dataShards)
+	nodeMap := make(map[string]*mockCAS, numNodes)
+	for i := 0; i < numNodes; i++ {
+		name := fmt.Sprintf("node%d", i)
+		node := NewMockCAS(name)
+		nodeMap[name] = node
+		gcas.AddNode(node)
+	}
+	return gcas, db, nodeMap
 }
