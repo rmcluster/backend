@@ -2,7 +2,6 @@ package tracker
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"math"
 	"net"
@@ -83,8 +82,8 @@ func (t *Tracker) Announce(c *gin.Context) {
 
 	id, ok := c.GetQuery("id")
 	if !ok {
-		// older clients (e.g. iOS app) don't send id; derive one from ip:port
-		id = fmt.Sprintf("%s:%d", ip, portNum)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing id"})
+		return
 	}
 
 	var storagePort int

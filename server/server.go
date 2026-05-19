@@ -18,19 +18,17 @@ type Server struct {
 	ModelNameMangler func(string) string
 	BasePort         int // starting port number to use for underlying instances
 
-	ramalama      llama.Llama
-	scheduler     scheduling.Scheduler
-	loadingStatus scheduling.LoadingStatusProvider // may be nil
+	ramalama  llama.Llama
+	scheduler scheduling.Scheduler
 
 	demangleCacheLock sync.RWMutex
 	demangleCache     map[string]string
 }
 
-func NewServer(r llama.Llama, scheduler scheduling.Scheduler, loadingStatus scheduling.LoadingStatusProvider) *Server {
+func NewServer(r llama.Llama, scheduler scheduling.Scheduler) *Server {
 	return &Server{
 		ramalama:      r,
 		scheduler:     scheduler,
-		loadingStatus: loadingStatus,
 		demangleCache: map[string]string{},
 	}
 }
@@ -41,12 +39,8 @@ func (s *Server) HandleHttp(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
 	mux.HandleFunc("POST /v1/completions", s.handleCompletions)
 
-	// Loading status (polled by the frontend while a model is starting up)
-	mux.HandleFunc("GET /api/ui/loading-status", s.handleLoadingStatus)
-
 	// llama-swap style endpoint
 	mux.HandleFunc("/upstream/{model}/{rest...}", s.serveUpstream)
-	mux.HandleFunc("/upstream/{$}", s.serveUpstreamSelect)
 }
 
 func (s *Server) proxyEndpoint(w http.ResponseWriter, r *http.Request, modelFinder func(body io.Reader) (model string, err error)) {
@@ -114,28 +108,6 @@ func (s *Server) handleCompletions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleLoadingStatus(w http.ResponseWriter, r *http.Request) {
-	type response struct {
-		Model    string  `json:"model"`
-		Phase    string  `json:"phase"`
-		Progress float64 `json:"progress"` // download progress [0,100]
-	}
-
-	var resp response
-	if s.loadingStatus != nil {
-		resp.Model, resp.Phase, resp.Progress = s.loadingStatus.GetLoadingStatus()
-	} else {
-		type statusProvider interface {
-			GetLoadingStatus() (model, phase string, progress float64)
-		}
-		if p, ok := s.scheduler.(statusProvider); ok {
-			resp.Model, resp.Phase, resp.Progress = p.GetLoadingStatus()
-		}
-	}
-
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_ = json.NewEncoder(w).Encode(resp)
-}
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	internalServerError := func(reason string) {

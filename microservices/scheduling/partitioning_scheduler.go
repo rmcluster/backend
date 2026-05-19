@@ -23,6 +23,7 @@ type instanceInfo struct {
 	usedNodes []Node
 }
 
+
 type TaskCompletionMessage struct {
 	instanceInfo
 	task Task
@@ -40,10 +41,8 @@ func NewPartitioningScheduler(instanceFactory InstanceFactory, parallelismTarget
 		unallocatedNodes:   make(map[string]Node),
 		allocatedNodes:     make(map[string]NodeAllocationInfo),
 		idleInstances:      make(map[string][]instanceInfo),
-		newTasksChan:       make(chan Task, 16),
-		nodeConnectChan:    make(chan Node, 16),
-		nodeDisconnectChan: make(chan Node, 16),
-		nodeEventChan:      make(chan NodeEvent, 16),
+		newTasksChan:      make(chan Task, 16),
+		nodeEventChan:     make(chan NodeEvent, 16),
 		taskCancelledChan:  make(chan Task, 16),
 		taskCompletedChan:  make(chan TaskCompletionMessage, 16),
 		instanceDeadChan:   make(chan instanceInfo, 16),
@@ -77,8 +76,6 @@ type PartitioningScheduler struct {
 
 	// channels for the different notification types
 	newTasksChan      chan Task
-	nodeConnectChan   chan Node
-	nodeDisconnectChan chan Node
 	nodeEventChan     chan NodeEvent
 	taskCancelledChan chan Task
 	taskCompletedChan chan TaskCompletionMessage
@@ -248,9 +245,7 @@ taskHandlerLoop:
 		instance, err := s.instanceFactory.StartInstance(task.Model(), nodes)
 		if err != nil {
 			log.Printf("Failed to create instance: %v", err)
-			if f, ok := task.(interface{ Fail(error) }); ok {
-				f.Fail(err)
-			}
+			task.Fail(err)
 			continue
 		}
 
@@ -281,9 +276,7 @@ taskHandlerLoop:
 			}()
 			if err := instanceInfo.instance.WaitReady(); err != nil {
 				log.Printf("Failed to wait for instance to be ready: %v", err)
-				if f, ok := task.(interface{ Fail(error) }); ok {
-					f.Fail(err)
-				}
+				task.Fail(err)
 				return
 			}
 			task.PerformInference(instanceInfo.instance)

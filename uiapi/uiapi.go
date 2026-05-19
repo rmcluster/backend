@@ -10,43 +10,35 @@ import (
 	"time"
 
 	"github.com/wk-y/rama-swap/llama"
+	"github.com/wk-y/rama-swap/microservices/scheduling"
 	"github.com/wk-y/rama-swap/tracker"
 )
 
 type UIApi struct {
-	tracker *tracker.Tracker
-	llama   llama.Llama
+	tracker       *tracker.Tracker
+	llama         llama.Llama
+	loadingStatus scheduling.LoadingStatusProvider // may be nil
 
-	connectLock    sync.Mutex
-	connectTokens  map[string]time.Time
-	deviceLock     sync.Mutex
-	deviceRegistry map[string]registeredDevice
-	chatLock       sync.Mutex
+	connectLock   sync.Mutex
+	connectTokens map[string]time.Time
+	chatLock      sync.Mutex
 	chatSessions   map[string]chatSessionRecord
 }
 
-type registeredDevice struct {
-	DeviceID string    `json:"device_id"`
-	Label    string    `json:"label"`
-	IP       string    `json:"ip"`
-	RPCPort  int       `json:"rpc_port"`
-	Token    string    `json:"-"`
-	LastSeen time.Time `json:"last_seen"`
-}
 
 var (
 	hfStoreOnce sync.Once
 	hfStore     *hfMetadataStore
 )
 
-func New(tracker *tracker.Tracker, llama llama.Llama) *UIApi {
+func New(tracker *tracker.Tracker, llama llama.Llama, loadingStatus scheduling.LoadingStatusProvider) *UIApi {
 	initHFMetadataStoreFromEnv()
 	return &UIApi{
 		tracker:        tracker,
 		llama:          llama,
-		connectTokens:  make(map[string]time.Time),
-		deviceRegistry: make(map[string]registeredDevice),
-		chatSessions:   make(map[string]chatSessionRecord),
+		loadingStatus:  loadingStatus,
+		connectTokens: make(map[string]time.Time),
+		chatSessions:  make(map[string]chatSessionRecord),
 	}
 }
 
@@ -80,6 +72,7 @@ func defaultMetadataDBPath() string {
 
 func (s *UIApi) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ui", s.handleAPIRoot)
+	mux.HandleFunc("GET /api/ui/loading-status", s.handleLoadingStatus)
 	mux.HandleFunc("/api/ui/models", s.handleAPIModels)
 	mux.HandleFunc("/api/ui/models/search", s.handleAPISearchModels)
 	mux.HandleFunc("/api/ui/models/hf", s.handleAPIAddHFModel)
@@ -88,8 +81,6 @@ func (s *UIApi) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ui/connect-info", s.handleAPIConnectInfo)
 	mux.HandleFunc("/api/ui/chats", s.handleAPIStartChat)
 	mux.HandleFunc("/api/ui/chats/", s.handleAPIChatRoute)
-	mux.HandleFunc("/api/v1/devices/register", s.handleAPIDeviceRegister)
-	mux.HandleFunc("/api/v1/devices/", s.handleAPIDeviceAction)
 }
 
 func (s *UIApi) listModelEntries() []modelEntry {

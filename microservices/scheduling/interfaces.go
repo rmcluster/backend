@@ -30,4 +30,5 @@ type Node interface {
 type Task interface {
 	Model() string
 	PerformInference(instance Instance) error
+	Fail(err error)
 }

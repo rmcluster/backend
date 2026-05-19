@@ -10,31 +10,30 @@ go run .
 
 ## Web UI
 
-The long-term frontend is now being moved to React/Vite under [frontend](frontend).
+The long-term frontend is now being moved to React/Vite under [rmcluster/frontend](https://github.com/rmcluster/frontend).
 
 The current server-rendered pages remain available for transition and fallback. The currently available pages are:
 
 - `/` for the landing page and navigation
 - `/dashboard` for connected device status
 
-For the new frontend, run the React dev server in [frontend](frontend) and point it at the API routes under `/api/ui`.
+For the new frontend, run the React dev server from [rmcluster/frontend](https://github.com/rmcluster/frontend) and point it at the API routes under `/api/ui`.
 
 ## Metadata Cache
 
 Hugging Face model metadata is cached in an embedded BoltDB file.
 
-- Local default path: `~/Library/Caches/rmd/metadata.db` (macOS)
-- Docker default path: `/var/lib/rmd/metadata.db`
+- Default path: `$XDG_CACHE_HOME/rmd/metadata.db` (Linux), `~/Library/Caches/rmd/metadata.db` (macOS)
+- Docker default path: `/var/cache/rmd/metadata.db`
 - Override path with `RMD_METADATA_DB_PATH`
 
-For Docker, keep `/var/lib/rmd` on a persistent volume so metadata survives container restarts.
+For Docker, mount `/var/cache/rmd` as a persistent volume so metadata survives container restarts.
 
 ## Local Model Storage
 
 Uploaded local `.gguf` models are stored under:
 
-- Local default path: `~/Library/Caches/rmd/models` (macOS)
-- Docker default path: `/var/lib/rmd/models`
+- Default path: `$XDG_DATA_HOME/rmd/models` (Linux), `~/.local/share/rmd/models` (fallback)
 - Override path with `RMD_MODEL_STORAGE_DIR`
 
 ## Run Client
