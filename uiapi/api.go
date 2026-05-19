@@ -16,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wk-y/rama-swap/tracker"
 )
 
 // ---- API types ----
@@ -76,15 +75,6 @@ type connectInfoResponse struct {
 	Token                 string `json:"token"`
 	ConnectURI            string `json:"connect_uri"`
 	TokenExpiresInSeconds int    `json:"token_expires_in_seconds"`
-}
-
-type deviceRegisterRequest struct {
-	DeviceID string `json:"device_id"`
-	Label    string `json:"label"`
-	IP       string `json:"ip"`
-	RPCPort  int    `json:"rpc_port"`
-	Token    string `json:"token"`
-	MaxSize  int64  `json:"max_size,omitempty"` // bytes; 0 or omitted means unknown
 }
 
 // ---- Chat session types ----
@@ -155,112 +145,6 @@ func (s *UIApi) handleAPIConnectInfo(w http.ResponseWriter, r *http.Request) {
 		ConnectURI:            connectURI,
 		TokenExpiresInSeconds: 120,
 	})
-}
-
-func (s *UIApi) handleAPIDeviceRegister(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	var req deviceRegisterRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-
-	if strings.TrimSpace(req.DeviceID) == "" || strings.TrimSpace(req.IP) == "" || req.RPCPort <= 0 || req.RPCPort > 65535 {
-		writeAPIError(w, http.StatusBadRequest, "missing device_id, ip, or rpc_port")
-		return
-	}
-
-	if net.ParseIP(strings.TrimSpace(req.IP)) == nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid ip")
-		return
-	}
-
-	if !s.consumeConnectToken(strings.TrimSpace(req.Token)) {
-		writeAPIError(w, http.StatusUnauthorized, "invalid or expired token")
-		return
-	}
-
-	maxSize := req.MaxSize
-	if maxSize <= 0 {
-		maxSize = -1 // unknown
-	}
-
-	now := time.Now()
-	rec := registeredDevice{
-		DeviceID: strings.TrimSpace(req.DeviceID),
-		Label:    strings.TrimSpace(req.Label),
-		IP:       strings.TrimSpace(req.IP),
-		RPCPort:  req.RPCPort,
-		Token:    strings.TrimSpace(req.Token),
-		LastSeen: now,
-	}
-
-	s.deviceLock.Lock()
-	s.deviceRegistry[rec.DeviceID] = rec
-	s.deviceLock.Unlock()
-
-	s.tracker.RegisterNode(tracker.RpcServerInfo{
-		Id:            rec.DeviceID,
-		Ip:            rec.IP,
-		Port:          rec.RPCPort,
-		HardwareModel: rec.Label,
-		MaxSize:       maxSize,
-		Battery:       math.NaN(),
-		Temperature:   math.NaN(),
-	})
-
-	writeAPIJSON(w, http.StatusCreated, map[string]any{
-		"status":   "registered",
-		"endpoint": fmt.Sprintf("%s:%d", rec.IP, rec.RPCPort),
-	})
-}
-
-func (s *UIApi) handleAPIDeviceAction(w http.ResponseWriter, r *http.Request) {
-	trimmed := strings.TrimPrefix(r.URL.Path, "/api/v1/devices/")
-	parts := strings.Split(strings.Trim(trimmed, "/"), "/")
-	if len(parts) != 2 || parts[1] != "keepalive" {
-		writeAPIError(w, http.StatusNotFound, "not found")
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	deviceID := parts[0]
-	s.deviceLock.Lock()
-	rec, ok := s.deviceRegistry[deviceID]
-	if ok {
-		rec.LastSeen = time.Now()
-		s.deviceRegistry[deviceID] = rec
-	}
-	s.deviceLock.Unlock()
-
-	if !ok {
-		writeAPIError(w, http.StatusNotFound, "device not found")
-		return
-	}
-
-	if auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "); auth == "" || auth != rec.Token {
-		writeAPIError(w, http.StatusUnauthorized, "invalid token")
-		return
-	}
-
-	s.tracker.RegisterNode(tracker.RpcServerInfo{
-		Id:            rec.DeviceID,
-		Ip:            rec.IP,
-		Port:          rec.RPCPort,
-		HardwareModel: rec.Label,
-		MaxSize:       -1,
-		Battery:       math.NaN(),
-		Temperature:   math.NaN(),
-	})
-
-	writeAPIJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
 // ---- Chat session handlers ----
@@ -703,6 +587,21 @@ func (s *UIApi) handleAPILocalModelUpload(w http.ResponseWriter, r *http.Request
 		LinkHref:     entry.LinkHref,
 		LinkLabel:    entry.LinkLabel,
 	})
+}
+
+func (s *UIApi) handleLoadingStatus(w http.ResponseWriter, r *http.Request) {
+	type response struct {
+		Model    string  `json:"model"`
+		Phase    string  `json:"phase"`
+		Progress float64 `json:"progress"`
+	}
+
+	var resp response
+	if s.loadingStatus != nil {
+		resp.Model, resp.Phase, resp.Progress = s.loadingStatus.GetLoadingStatus()
+	}
+
+	writeAPIJSON(w, http.StatusOK, resp)
 }
 
 func (s *UIApi) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {

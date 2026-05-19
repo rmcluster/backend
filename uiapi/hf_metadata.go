@@ -230,9 +230,7 @@ func extractArchitectureFromTags(tags []string) string {
 	for _, tag := range tags {
 		if strings.HasPrefix(tag, "base_model:") {
 			value := strings.TrimPrefix(tag, "base_model:")
-			if strings.HasPrefix(value, "quantized:") {
-				value = strings.TrimPrefix(value, "quantized:")
-			}
+			value = strings.TrimPrefix(value, "quantized:")
 			if value != "" {
 				parts := strings.Split(value, "/")
 				if len(parts) > 0 {
