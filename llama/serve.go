@@ -31,14 +31,14 @@ func (c Llama) ServeCommand(ctx context.Context, args ServeArgs) *exec.Cmd {
 		sep = ","
 	}
 
-	offloadLayers := 8
-	if args.OffloadLayers != nil {
-		offloadLayers = *args.OffloadLayers
-	}
+	// offloadLayers := 8
+	// if args.OffloadLayers != nil {
+	// 	offloadLayers = *args.OffloadLayers
+	// }
 
 	// -c 4096: cap context window so KV cache stays ~140 MB on phone instead of
 	// the model's default (32K-64K ctx = 4+ GB KV cache that OOMs the phone).
-	cliArgs = append(cliArgs, "-ngl", fmt.Sprint(offloadLayers), "-c", "4096", "--rpc", nodes.String())
+	cliArgs = append(cliArgs, "-ngl", "99", "-c", "4096", "--rpc", nodes.String())
 
 	if args.Alias != nil {
 		cliArgs = append(cliArgs, "-n", *args.Alias)
