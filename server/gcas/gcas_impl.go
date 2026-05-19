@@ -371,17 +371,21 @@ func (g *GcasImpl) Put(ctx context.Context, hash Hash, data []byte) error {
 		return ErrNoNodes{}
 	}
 
-	idx := rand.Intn(len(nodes))
-	node := nodes[idx]
+	rand.Shuffle(len(nodes), func(i, j int) {
+		nodes[i], nodes[j] = nodes[j], nodes[i]
+	})
 
-	err := node.cas.Put(ctx, hash, data)
-
-	if err != nil && !errors.Is(err, HashExistsError{}) {
-		return err
+	var lastErr error
+	for _, node := range nodes {
+		err := node.cas.Put(ctx, hash, data)
+		if err == nil || errors.Is(err, HashExistsError{}) {
+			_, err = g.db.ExecContext(ctx, "INSERT INTO chunks (hash, size, node_id) VALUES (?, ?, ?)", hash[:], len(data), node.id)
+			return err
+		}
+		lastErr = err
 	}
 
-	_, err = g.db.ExecContext(ctx, "INSERT INTO chunks (hash, size, node_id) VALUES (?, ?, ?)", hash[:], len(data), node.id)
-	return err
+	return lastErr
 }
 
 // RunGC runs the garbage collection process.
