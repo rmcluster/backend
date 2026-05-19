@@ -118,23 +118,21 @@ func main() {
 		}
 	}()
 
-	rpcTracker := tracker.NewTracker()
-	tracker.DefaultTracker = rpcTracker
 	factory := scheduling.NewInstanceFactory(&ramalama, 49170)
 	loadingTracker := &scheduling.LoadingStatusTracker{}
 	if setter, ok := factory.(scheduling.PhaseCallbackSetter); ok {
 		setter.SetPhaseCallback(loadingTracker.OnPhaseUpdate)
 	}
 	scheduler := scheduling.NewPartitioningScheduler(factory, 3)
-	rpcTracker.Subscribe(schedulersubscriber.NewSchedulerSubscriber(scheduler))
+	tracker.DefaultTracker.Subscribe(schedulersubscriber.NewSchedulerSubscriber(scheduler))
 	cas := gcas.NewGCAS(gcasdb)
-	rpcTracker.Subscribe(gcassubscriber.NewGCASSubscriber(cas))
-	server := server.NewServer(ramalama, scheduler, loadingTracker)
-	dashboard := dashboard.NewDashboard(rpcTracker)
+	tracker.DefaultTracker.Subscribe(gcassubscriber.NewGCASSubscriber(cas))
+	server := server.NewServer(ramalama, scheduler)
+	dashboard := dashboard.NewDashboard(tracker.DefaultTracker)
 	dashboard.RegisterHandlers(mux)
 	homepage := homepage.NewHomepage()
 	homepage.RegisterHandlers(mux)
-	ui := uiapi.New(rpcTracker, ramalama)
+	ui := uiapi.New(tracker.DefaultTracker, ramalama, loadingTracker)
 	ui.RegisterHandlers(mux)
 
 	server.ModelNameMangler = func(s string) string {
