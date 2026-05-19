@@ -22,10 +22,22 @@ func OpenDB(dbPath string) (*sql.DB, error) {
 }
 
 func OpenDBWithVersion(dbPath string, version uint) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", dbPath+"?pragma=busy_timeout=10000")
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)")
 	if err != nil {
 		return nil, err
 	}
+
+	for _, pragma := range []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA synchronous=NORMAL",
+		"PRAGMA busy_timeout=10000",
+	} {
+		if _, err := db.Exec(pragma); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+	db.SetMaxOpenConns(1)
 
 	driver, err := sqlite.WithInstance(db, &sqlite.Config{})
 	if err != nil {
