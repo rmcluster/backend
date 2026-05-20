@@ -24,6 +24,8 @@ type FcfsScheduler struct {
 	activeModel  string
 	activeInst   Instance
 	runningTasks int
+	loadingPhase    string  // set while state == stateStarting
+	loadingProgress float64 // download progress [0,100], only meaningful during PhaseDownloading
 }
 
 // NewFcfsScheduler creates a new FcfsScheduler.
@@ -154,7 +156,33 @@ func (f *FcfsScheduler) pump() {
 	}
 }
 
+// GetLoadingStatus implements [LoadingStatusProvider].
+func (f *FcfsScheduler) GetLoadingStatus() (model, phase string, progress float64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.state != stateStarting {
+		return "", "", 0
+	}
+	return f.activeModel, f.loadingPhase, f.loadingProgress
+}
+
 func (f *FcfsScheduler) startInstance(model string, nodes []Node) {
+	// Mark initial phase and register a callback so stderr lines update it.
+	f.mu.Lock()
+	f.loadingPhase = PhaseStarting
+	f.mu.Unlock()
+
+	if setter, ok := f.factory.(PhaseCallbackSetter); ok {
+		setter.SetPhaseCallback(func(m, phase string, progress float64) {
+			f.mu.Lock()
+			if f.activeModel == m {
+				f.loadingPhase = phase
+				f.loadingProgress = progress
+			}
+			f.mu.Unlock()
+		})
+	}
+
 	var err error
 
 	// refuse to start if no nodes are available
@@ -178,12 +206,22 @@ func (f *FcfsScheduler) startInstance(model string, nodes []Node) {
 	if err != nil {
 		log.Printf("FcfsScheduler: Failed to start instance for model %s: %v", model, err)
 		f.state = stateIdle
-		// If the failing task is still at the front, drop it to prevent infinite loop
+		f.loadingPhase = ""
+		// Drop the failing task to prevent an infinite retry loop, and notify
+		// the waiting handler so its HTTP request doesn't hang forever.
 		if len(f.queue) > 0 && f.queue[0].Model() == model {
+			failedTask := f.queue[0]
 			f.queue = f.queue[1:]
+			go func(t Task, e error) {
+				type failable interface{ Fail(error) }
+				if ft, ok := t.(failable); ok {
+					ft.Fail(e)
+				}
+			}(failedTask, err)
 		}
 	} else {
 		f.state = stateRunning
+		f.loadingPhase = ""
 		f.activeInst = instance
 		go func(inst Instance) {
 			inst.AwaitTermination()
