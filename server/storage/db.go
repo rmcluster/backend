@@ -60,7 +60,7 @@ func OpenDB(dbPath string, version uint) (*sql.DB, error) {
 		return nil, err
 	}
 
-	if err = migrator.Migrate(version); err != nil {
+	if err = migrator.Migrate(version); err != nil && err != migrate.ErrNoChange {
 		return nil, err
 	}
 
