@@ -89,6 +89,7 @@ func main() {
 
 	// set up server
 	router := openapi.NewRouter()
+	router.SetTrustedProxies(nil) // we don't use any proxies on the backend
 	mux := http.NewServeMux()
 
 	// Forward everything gin doesn't own (/announce, /servers) to the mux.
