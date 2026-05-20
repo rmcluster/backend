@@ -23,6 +23,7 @@ type instanceInfo struct {
 	usedNodes []Node
 }
 
+
 type TaskCompletionMessage struct {
 	instanceInfo
 	task Task
@@ -35,18 +36,18 @@ type NodeAllocationInfo struct {
 
 func NewPartitioningScheduler(instanceFactory InstanceFactory, parallelismTarget int) *PartitioningScheduler {
 	scheduler := &PartitioningScheduler{
-		instanceFactory:   instanceFactory,
-		modelQueues:       make(map[string][]*timestampedTask),
-		unallocatedNodes:  make(map[string]Node),
-		allocatedNodes:    make(map[string]NodeAllocationInfo),
-		idleInstances:     make(map[string][]instanceInfo),
-		newTasksChan:      make(chan Task),
-		nodeEventChan:     make(chan NodeEvent),
-		taskCancelledChan: make(chan Task),
-		taskCompletedChan: make(chan TaskCompletionMessage),
-		parallelismTarget: parallelismTarget,
-		idleBias:          10 * time.Second,
-		instanceDeadChan:  make(chan instanceInfo),
+		instanceFactory:    instanceFactory,
+		modelQueues:        make(map[string][]*timestampedTask),
+		unallocatedNodes:   make(map[string]Node),
+		allocatedNodes:     make(map[string]NodeAllocationInfo),
+		idleInstances:      make(map[string][]instanceInfo),
+		newTasksChan:      make(chan Task, 16),
+		nodeEventChan:     make(chan NodeEvent, 16),
+		taskCancelledChan:  make(chan Task, 16),
+		taskCompletedChan:  make(chan TaskCompletionMessage, 16),
+		instanceDeadChan:   make(chan instanceInfo, 16),
+		parallelismTarget:  parallelismTarget,
+		idleBias:           10 * time.Second,
 	}
 	go scheduler.run()
 	return scheduler
@@ -95,6 +96,7 @@ type NodeEvent struct {
 
 // OnNewTask implements [Scheduler].
 func (s *PartitioningScheduler) OnNewTask(task Task) {
+	log.Printf("PartitioningScheduler: received task for model %s", task.Model())
 	s.newTasksChan <- task
 }
 
@@ -238,9 +240,12 @@ taskHandlerLoop:
 			}
 		}
 
+		log.Printf("PartitioningScheduler: starting model %s with %d nodes", task.Model(), len(nodes))
+
 		instance, err := s.instanceFactory.StartInstance(task.Model(), nodes)
 		if err != nil {
 			log.Printf("Failed to create instance: %v", err)
+			task.Fail(err)
 			continue
 		}
 
@@ -271,6 +276,7 @@ taskHandlerLoop:
 			}()
 			if err := instanceInfo.instance.WaitReady(); err != nil {
 				log.Printf("Failed to wait for instance to be ready: %v", err)
+				task.Fail(err)
 				return
 			}
 			task.PerformInference(instanceInfo.instance)

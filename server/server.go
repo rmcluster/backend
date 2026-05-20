@@ -41,7 +41,6 @@ func (s *Server) HandleHttp(mux *http.ServeMux) {
 
 	// llama-swap style endpoint
 	mux.HandleFunc("/upstream/{model}/{rest...}", s.serveUpstream)
-	mux.HandleFunc("/upstream/{$}", s.serveUpstreamSelect)
 }
 
 func (s *Server) proxyEndpoint(w http.ResponseWriter, r *http.Request, modelFinder func(body io.Reader) (model string, err error)) {
@@ -85,6 +84,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			return "", fmt.Errorf("missing model key")
 		}
 
+		log.Printf("Chat completion requested for model %s", *modelGet.Model)
 		return *modelGet.Model, nil
 	})
 }
@@ -107,6 +107,7 @@ func (s *Server) handleCompletions(w http.ResponseWriter, r *http.Request) {
 		return *modelGet.Model, nil
 	})
 }
+
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	internalServerError := func(reason string) {

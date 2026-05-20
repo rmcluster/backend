@@ -12,5 +12,10 @@ COPY --from=builder /build-dir/rmd-server /usr/local/bin/rmd-server
 
 # llama.cpp's docker image puts the executables in /app
 ENV PATH=/app:$PATH
+ENV RMD_METADATA_DB_PATH=/var/lib/rmd/metadata.db
+ENV RMD_MODEL_STORAGE_DIR=/var/lib/rmd/models
+RUN mkdir -p /var/lib/rmd
+RUN mkdir -p /var/lib/rmd/models
+VOLUME ["/var/lib/rmd"]
 ENTRYPOINT [ "rmd-server", "-host", "0.0.0.0", "-port", "4917" ]
 EXPOSE 4917

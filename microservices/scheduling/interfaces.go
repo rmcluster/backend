@@ -24,9 +24,11 @@ type Node interface {
 	Id() string
 	Ip() string
 	Port() int
+	MaxSize() int64
 }
 
 type Task interface {
 	Model() string
 	PerformInference(instance Instance) error
+	Fail(err error)
 }
