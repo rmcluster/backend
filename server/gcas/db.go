@@ -12,6 +12,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+const pragmaString = `PRAGMA journal_mode=WAL;
+		PRAGMA synchronous=NORMAL;
+		PRAGMA busy_timeout=10000;`
+
 //go:embed migrations/*.sql
 var migrations embed.FS
 
@@ -22,21 +26,16 @@ func OpenDB(dbPath string) (*sql.DB, error) {
 }
 
 func OpenDBWithVersion(dbPath string, version uint) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)")
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, err
 	}
 
-	for _, pragma := range []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA synchronous=NORMAL",
-		"PRAGMA busy_timeout=10000",
-	} {
-		if _, err := db.Exec(pragma); err != nil {
-			db.Close()
-			return nil, err
-		}
+	if _, err := db.Exec(pragmaString); err != nil {
+		db.Close()
+		return nil, err
 	}
+
 	db.SetMaxOpenConns(1)
 
 	driver, err := sqlite.WithInstance(db, &sqlite.Config{})
@@ -64,6 +63,7 @@ func OpenDBWithVersion(dbPath string, version uint) (*sql.DB, error) {
 	}
 
 	if err = migrator.Migrate(version); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		db.Close()
 		return nil, err
 	}
 

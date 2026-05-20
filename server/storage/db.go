@@ -3,6 +3,7 @@ package storage
 import (
 	"database/sql"
 	"embed"
+	"errors"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/sqlite"
@@ -10,6 +11,10 @@ import (
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	_ "modernc.org/sqlite"
 )
+
+const pragmaString = `PRAGMA journal_mode=WAL;
+		PRAGMA synchronous=NORMAL;
+		PRAGMA busy_timeout=10000;`
 
 //go:embed migrations/*.sql
 var migrations embed.FS
@@ -19,20 +24,14 @@ var migrations embed.FS
 //
 // Pattern mirrors server/gcas/db.go to keep the project consistent.
 func OpenDB(dbPath string, version uint) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)")
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, err
 	}
 
-	for _, pragma := range []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA synchronous=NORMAL",
-		"PRAGMA busy_timeout=10000",
-	} {
-		if _, err := db.Exec(pragma); err != nil {
-			db.Close()
-			return nil, err
-		}
+	if _, err := db.Exec(pragmaString); err != nil {
+		db.Close()
+		return nil, err
 	}
 
 	db.SetMaxOpenConns(1)
@@ -60,7 +59,8 @@ func OpenDB(dbPath string, version uint) (*sql.DB, error) {
 		return nil, err
 	}
 
-	if err = migrator.Migrate(version); err != nil && err != migrate.ErrNoChange {
+	if err = migrator.Migrate(version); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		db.Close()
 		return nil, err
 	}
 
