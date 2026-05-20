@@ -122,6 +122,7 @@ func main() {
 	loadingTracker := &scheduling.LoadingStatusTracker{}
 	if setter, ok := factory.(scheduling.PhaseCallbackSetter); ok {
 		setter.SetPhaseCallback(loadingTracker.OnPhaseUpdate)
+		setter.SetLayersCallback(loadingTracker.OnLayersKnown)
 	}
 	scheduler := scheduling.NewPartitioningScheduler(factory, 3)
 	tracker.DefaultTracker.Subscribe(schedulersubscriber.NewSchedulerSubscriber(scheduler))

@@ -591,15 +591,18 @@ func (s *UIApi) handleAPILocalModelUpload(w http.ResponseWriter, r *http.Request
 
 func (s *UIApi) handleLoadingStatus(w http.ResponseWriter, r *http.Request) {
 	type response struct {
-		Model    string  `json:"model"`
-		Phase    string  `json:"phase"`
-		Progress float64 `json:"progress"`
+		Model       string  `json:"model"`
+		Phase       string  `json:"phase"`
+		Progress    float64 `json:"progress"`
+		LayersOnGpu int     `json:"layers_on_gpu"`
+		NodeCount   int     `json:"node_count"`
 	}
 
 	var resp response
 	if s.loadingStatus != nil {
-		resp.Model, resp.Phase, resp.Progress = s.loadingStatus.GetLoadingStatus()
+		resp.Model, resp.Phase, resp.Progress, resp.LayersOnGpu = s.loadingStatus.GetLoadingStatus()
 	}
+	resp.NodeCount = len(s.tracker.GetServers())
 
 	writeAPIJSON(w, http.StatusOK, resp)
 }

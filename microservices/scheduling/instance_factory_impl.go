@@ -23,10 +23,11 @@ func NewInstanceFactory(llmService *llama.Llama, lowestPort int) InstanceFactory
 
 type instanceFactoryImpl struct {
 	sync.Mutex
-	llmService    *llama.Llama
-	lowestPort    int              // the lowest port to use
-	usedPorts     map[int]struct{} // ports that are currently in use
-	phaseCallback func(model, phase string, progress float64)
+	llmService     *llama.Llama
+	lowestPort     int              // the lowest port to use
+	usedPorts      map[int]struct{} // ports that are currently in use
+	phaseCallback  func(model, phase string, progress float64)
+	layersCallback func(layersOnGpu int)
 }
 
 // SetPhaseCallback implements [PhaseCallbackSetter].
@@ -36,9 +37,21 @@ func (i *instanceFactoryImpl) SetPhaseCallback(cb func(model, phase string, prog
 	i.phaseCallback = cb
 }
 
+// SetLayersCallback implements [PhaseCallbackSetter].
+func (i *instanceFactoryImpl) SetLayersCallback(cb func(layersOnGpu int)) {
+	i.Lock()
+	defer i.Unlock()
+	i.layersCallback = cb
+}
+
 // StartInstance implements [InstanceFactory].
 func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instance, error) {
 	log.Printf("Starting instance for model %s on %d nodes", model, len(nodes))
+	i.Lock()
+	if cb := i.phaseCallback; cb != nil {
+		cb(model, PhaseStarting, 0)
+	}
+	i.Unlock()
 
 	// build list of rpc nodes
 	rpcNodes := make([]llama.RpcNode, len(nodes))
@@ -72,8 +85,8 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 			OffloadLayers: &offloadLayers,
 		})
 		cmd.Stdout = newProcessLogWriter(model, "stdout", nil)
-		// i is already locked here — read phaseCallback directly, no re-lock
-		cmd.Stderr = newProcessLogWriter(model, "stderr", makePhaseDetector(model, i.phaseCallback))
+		// i is already locked here — read callbacks directly, no re-lock
+		cmd.Stderr = newProcessLogWriter(model, "stderr", makePhaseDetector(model, i.phaseCallback, i.layersCallback))
 
 		err := cmd.Start()
 		if err != nil {
@@ -153,6 +166,10 @@ func newProcessLogWriter(model string, stream string, onLine func(string)) *proc
 // reProgressPct matches llama.cpp download progress lines, e.g. "45.2% (123456 / 272060416 bytes)"
 var reProgressPct = regexp.MustCompile(`(\d+(?:\.\d+)?)%`)
 
+// reOffloadLayers matches lines like "llm_load_tensors: offloading 32 repeating layers to GPU"
+// and "llm_load_tensors: offloaded 32/33 layers to GPU"
+var reOffloadLayers = regexp.MustCompile(`offload(?:ing|ed)\s+(\d+)`)
+
 func (w *processLogWriter) Write(p []byte) (int, error) {
 	// Treat \r as a line terminator so llama.cpp in-place progress updates are
 	// each dispatched as individual lines rather than accumulated silently.
@@ -188,29 +205,43 @@ func (w *processLogWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// makePhaseDetector returns an onLine hook that calls cb whenever a known
-// loading phase is detected in a llama-server stderr line.
-func makePhaseDetector(model string, cb func(model, phase string, progress float64)) func(string) {
-	if cb == nil {
+// makePhaseDetector returns an onLine hook that calls phaseCb whenever a known
+// loading phase is detected, and layersCb when the GPU offload count is known.
+func makePhaseDetector(model string, phaseCb func(model, phase string, progress float64), layersCb func(int)) func(string) {
+	if phaseCb == nil && layersCb == nil {
 		return nil
 	}
+	firstLine := true
 	return func(line string) {
-		switch {
-		case strings.Contains(line, ": downloading from "):
-			cb(model, PhaseDownloading, 0)
-		case strings.Contains(line, "downloading") && strings.Contains(line, "%"):
-			var pct float64
-			if m := reProgressPct.FindStringSubmatch(line); m != nil {
-				pct, _ = strconv.ParseFloat(m[1], 64)
+		if phaseCb != nil {
+			if firstLine {
+				firstLine = false
+				phaseCb(model, PhaseInitializing, 0)
 			}
-			cb(model, PhaseDownloading, pct)
-		case strings.Contains(line, "load_model: loading model"),
-			strings.Contains(line, "main: loading model"):
-			cb(model, PhaseLoading, 0)
-		case strings.Contains(line, "warming up"):
-			cb(model, PhaseWarmingUp, 0)
-		case strings.Contains(line, "server is listening"):
-			cb(model, PhaseReady, 0)
+			switch {
+			case strings.Contains(line, ": downloading from "):
+				phaseCb(model, PhaseDownloading, 0)
+			case strings.Contains(line, "downloading") && strings.Contains(line, "%"):
+				var pct float64
+				if m := reProgressPct.FindStringSubmatch(line); m != nil {
+					pct, _ = strconv.ParseFloat(m[1], 64)
+				}
+				phaseCb(model, PhaseDownloading, pct)
+			case strings.Contains(line, "load_model: loading model"),
+				strings.Contains(line, "main: loading model"):
+				phaseCb(model, PhaseLoading, 0)
+			case strings.Contains(line, "warming up"):
+				phaseCb(model, PhaseWarmingUp, 0)
+			case strings.Contains(line, "server is listening"):
+				phaseCb(model, PhaseReady, 0)
+			}
+		}
+		if layersCb != nil && strings.Contains(line, "offload") {
+			if m := reOffloadLayers.FindStringSubmatch(line); m != nil {
+				if n, err := strconv.Atoi(m[1]); err == nil {
+					layersCb(n)
+				}
+			}
 		}
 	}
 }
