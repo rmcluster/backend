@@ -1,4 +1,4 @@
-package gcas
+package storage
 
 import (
 	"database/sql"
@@ -19,13 +19,11 @@ const pragmaString = `PRAGMA journal_mode=WAL;
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-const dbVersion = 1
-
-func OpenDB(dbPath string) (*sql.DB, error) {
-	return OpenDBWithVersion(dbPath, dbVersion)
-}
-
-func OpenDBWithVersion(dbPath string, version uint) (*sql.DB, error) {
+// OpenDB opens the storage metadata database at dbPath, runs migrations
+// to the requested version, and returns the open connection.
+//
+// Pattern mirrors server/gcas/db.go to keep the project consistent.
+func OpenDB(dbPath string, version uint) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, err
@@ -56,7 +54,6 @@ func OpenDBWithVersion(dbPath string, version uint) (*sql.DB, error) {
 		"sqlite",
 		driver,
 	)
-
 	if err != nil {
 		db.Close()
 		return nil, err
