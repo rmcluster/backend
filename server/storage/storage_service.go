@@ -614,18 +614,18 @@ func renameSubtreeTx(ctx context.Context, tx *sql.Tx, src, dst string) error {
 		return fmt.Errorf("update src directory row: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `UPDATE directories SET path = ? || substr(path, ?), parent_path = ? || substr(parent_path, ?)
-		WHERE path >= ? AND path < ?`, dst, len(src)+1, dst, len(src)+1, lo, hi); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE directories SET path = ? || substr(path, length(?)+1), parent_path = ? || substr(parent_path, length(?)+1)
+		WHERE path >= ? AND path < ?`, dst, src, dst, src, lo, hi); err != nil {
 		return fmt.Errorf("update descendant directories: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `UPDATE files SET path = ? || substr(path, ?), parent_path = ? || substr(parent_path, ?)
-		WHERE path >= ? AND path < ?`, dst, len(src)+1, dst, len(src)+1, lo, hi); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE files SET path = ? || substr(path, length(?)+1), parent_path = ? || substr(parent_path, length(?)+1)
+		WHERE path >= ? AND path < ?`, dst, src, dst, src, lo, hi); err != nil {
 		return fmt.Errorf("update descendant files: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `UPDATE file_chunks SET file_path = ? || substr(file_path, ?) WHERE file_path >= ? AND file_path < ?`,
-		dst, len(src)+1, lo, hi); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE file_chunks SET file_path = ? || substr(file_path, length(?)+1) WHERE file_path >= ? AND file_path < ?`,
+		dst, src, lo, hi); err != nil {
 		return fmt.Errorf("update descendant file_chunks: %w", err)
 	}
 
