@@ -74,11 +74,9 @@ func (t *Tracker) Announce(c *gin.Context) {
 		return
 	}
 
-	// use the request's source address if ip is not specified
-	ip, ok := c.GetQuery("ip")
-	if !ok {
-		ip = c.RemoteIP()
-	}
+	// always use the actual source IP — the announced IP may be a different
+	// interface (e.g. cellular) that isn't reachable on the local network
+	ip := c.RemoteIP()
 
 	id, ok := c.GetQuery("id")
 	if !ok {

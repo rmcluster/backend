@@ -84,8 +84,7 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 			Port:          port,
 			OffloadLayers: &offloadLayers,
 		})
-		cmd.Stdout = newProcessLogWriter(model, "stdout", nil)
-		// i is already locked here — read callbacks directly, no re-lock
+		cmd.Stdout = newProcessLogWriter(model, "stdout", makePhaseDetector(model, i.phaseCallback, i.layersCallback))
 		cmd.Stderr = newProcessLogWriter(model, "stderr", makePhaseDetector(model, i.phaseCallback, i.layersCallback))
 
 		err := cmd.Start()
@@ -165,6 +164,7 @@ func newProcessLogWriter(model string, stream string, onLine func(string)) *proc
 
 // reProgressPct matches llama.cpp download progress lines, e.g. "45.2% (123456 / 272060416 bytes)"
 var reProgressPct = regexp.MustCompile(`(\d+(?:\.\d+)?)%`)
+var reAnsi = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]|\x1b[78]`)
 
 // reOffloadLayers matches lines like "llm_load_tensors: offloading 32 repeating layers to GPU"
 // and "llm_load_tensors: offloaded 32/33 layers to GPU"
@@ -195,6 +195,7 @@ func (w *processLogWriter) Write(p []byte) (int, error) {
 			break
 		}
 		line = strings.TrimRight(line, "\n\r")
+		line = reAnsi.ReplaceAllString(line, "")
 		if line != "" {
 			log.Printf("[llama %s %s] %s", w.model, w.stream, line)
 			if w.onLine != nil {
@@ -212,6 +213,7 @@ func makePhaseDetector(model string, phaseCb func(model, phase string, progress 
 		return nil
 	}
 	firstLine := true
+	downloading := false
 	return func(line string) {
 		if phaseCb != nil {
 			if firstLine {
@@ -220,8 +222,9 @@ func makePhaseDetector(model string, phaseCb func(model, phase string, progress 
 			}
 			switch {
 			case strings.Contains(line, ": downloading from "):
+				downloading = true
 				phaseCb(model, PhaseDownloading, 0)
-			case strings.Contains(line, "downloading") && strings.Contains(line, "%"):
+			case downloading && strings.Contains(line, "%"):
 				var pct float64
 				if m := reProgressPct.FindStringSubmatch(line); m != nil {
 					pct, _ = strconv.ParseFloat(m[1], 64)
@@ -229,6 +232,7 @@ func makePhaseDetector(model string, phaseCb func(model, phase string, progress 
 				phaseCb(model, PhaseDownloading, pct)
 			case strings.Contains(line, "load_model: loading model"),
 				strings.Contains(line, "main: loading model"):
+				downloading = false
 				phaseCb(model, PhaseLoading, 0)
 			case strings.Contains(line, "warming up"):
 				phaseCb(model, PhaseWarmingUp, 0)

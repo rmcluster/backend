@@ -46,9 +46,16 @@ func (c Llama) ServeCommand(ctx context.Context, args ServeArgs) *exec.Cmd {
 
 	cliArgs = append(cliArgs, "--port", fmt.Sprint(args.Port))
 
-	// temporary: if model name starts with hf: use -hf to load huggingface model
 	if strings.HasPrefix(args.Model, "hf:") {
-		cliArgs = append(cliArgs, "-hf", args.Model[3:])
+		hfSpec := args.Model[3:] // strip "hf:" prefix
+		repo, file, hasFile := strings.Cut(hfSpec, ":")
+		if hasFile && strings.HasSuffix(file, ".gguf") {
+			// specific file: use -hf repo -hff file.gguf so llama-server doesn't
+			// treat the filename as a quant filter and pick the wrong file
+			cliArgs = append(cliArgs, "-hf", repo, "-hff", file, "--no-mmproj")
+		} else {
+			cliArgs = append(cliArgs, "-hf", hfSpec, "--no-mmproj")
+		}
 	} else {
 		cliArgs = append(cliArgs, "--model", args.Model)
 	}
