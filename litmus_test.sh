@@ -1,5 +1,5 @@
 #!/bin/bash
-LITMUS_DOCKER_IMAGE=litmus
+LITMUS_DOCKER_IMAGE=ghcr.io/rmcluster/litmus-docker:main
 RESULTS_DIR="litmus/results"
 DATA_TMPDIR="litmus/data"
 
@@ -39,4 +39,5 @@ done
 
 sleep 1
 
+"$DOCKER" pull "$LITMUS_DOCKER_IMAGE"
 "$DOCKER" run -it --rm --net host "$LITMUS_DOCKER_IMAGE" dav://localhost:4917/dav 2>&1 | tee "$RESULTS_DIR/litmus.log"
