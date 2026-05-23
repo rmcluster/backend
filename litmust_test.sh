@@ -30,7 +30,7 @@ while ! grep "Listening on http://0.0.0.0:4917" "$RESULTS_DIR/server.log" &> /de
 done
 
 # spin up a node
-</dev/null go run ./cmd/linux-client/ -id node-1 -cas-path "$DATA_TMPDIR/cas" -tracker localhost:4917 -port 1921 >"$RESULTS_DIR/node.log" 2>&1 &
+</dev/null go run ./cmd/linux-client/ -id node-1 -cas-path "$DATA_TMPDIR/cas" -tracker localhost:4917 -port 1921 >"$RESULTS_DIR/node.log" -announce-ip 127.0.0.1 2>&1 &
 
 # wait for node to register
 while ! grep "New announce from node-1" "$RESULTS_DIR/server.log" &> /dev/null; do
