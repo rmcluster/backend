@@ -17,6 +17,21 @@ func NewDashboard(tracker *tracker.Tracker) *Dashboard {
 }
 
 func (d *Dashboard) HandleDashboard(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		// handled below
+
+	case http.MethodOptions:
+		w.Header().Del("Access-Control-Allow-Methods")
+		w.Header().Set("Access-Control-Allow-Methods", "GET")
+		w.WriteHeader(http.StatusOK)
+		return
+
+	default:
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Refresh", "5")
 	clients := d.tracker.GetServers()
