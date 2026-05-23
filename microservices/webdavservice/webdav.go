@@ -19,16 +19,18 @@ type WebDavService struct {
 }
 
 func (s *WebDavService) RegisterGinHandlers(router *gin.Engine) {
-	h := &webdav.Handler{
-		Prefix:     "/dav",
-		FileSystem: s.fs,
-		LockSystem: webdav.NewMemLS(),
-		Logger: func(r *http.Request, err error) {
-			if err != nil {
-				log.Printf("webdav: %s %s: %v", r.Method, r.URL.Path, err)
-			} else {
-				log.Printf("webdav: %s %s", r.Method, r.URL.Path)
-			}
+	h := corsWebdavMethodFixerWrapper{
+		W: &webdav.Handler{
+			Prefix:     "/dav",
+			FileSystem: s.fs,
+			LockSystem: webdav.NewMemLS(),
+			Logger: func(r *http.Request, err error) {
+				if err != nil {
+					log.Printf("webdav: %s %s: %v", r.Method, r.URL.Path, err)
+				} else {
+					log.Printf("webdav: %s %s", r.Method, r.URL.Path)
+				}
+			},
 		},
 	}
 
@@ -40,3 +42,16 @@ func (s *WebDavService) RegisterGinHandlers(router *gin.Engine) {
 		router.Handle(method, "/dav/*filepath", gin.WrapH(h))
 	}
 }
+
+type corsWebdavMethodFixerWrapper struct {
+	W *webdav.Handler
+}
+
+// ServeHTTP implements [http.Handler].
+func (c corsWebdavMethodFixerWrapper) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Del("Access-Control-Allow-Methods")
+	w.Header().Set("Access-Control-Allow-Methods", "COPY, DELETE, GET, HEAD, LOCK, MKCOL, MOVE, OPTIONS, POST, PROPFIND, PROPPATCH, PUT, TRACE, UNLOCK")
+	c.W.ServeHTTP(w, r)
+}
+
+var _ http.Handler = corsWebdavMethodFixerWrapper{}
