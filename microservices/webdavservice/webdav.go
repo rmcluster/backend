@@ -19,18 +19,16 @@ type WebDavService struct {
 }
 
 func (s *WebDavService) RegisterGinHandlers(router *gin.Engine) {
-	h := corsWebdavMethodFixerWrapper{
-		W: &webdav.Handler{
-			Prefix:     "/dav",
-			FileSystem: s.fs,
-			LockSystem: webdav.NewMemLS(),
-			Logger: func(r *http.Request, err error) {
-				if err != nil {
-					log.Printf("webdav: %s %s: %v", r.Method, r.URL.Path, err)
-				} else {
-					log.Printf("webdav: %s %s", r.Method, r.URL.Path)
-				}
-			},
+	h := &webdav.Handler{
+		Prefix:     "/dav",
+		FileSystem: s.fs,
+		LockSystem: webdav.NewMemLS(),
+		Logger: func(r *http.Request, err error) {
+			if err != nil {
+				log.Printf("webdav: %s %s: %v", r.Method, r.URL.Path, err)
+			} else {
+				log.Printf("webdav: %s %s", r.Method, r.URL.Path)
+			}
 		},
 	}
 

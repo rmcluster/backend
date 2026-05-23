@@ -168,7 +168,7 @@ func main() {
 	defer l.Close()
 
 	server.HandleHttp(mux)
-	err = http.Serve(l, requestLogger(corsMiddleware(router)))
+	err = http.Serve(l, router)
 
 	log.Fatalf("Failed to serve: %v", err)
 }
