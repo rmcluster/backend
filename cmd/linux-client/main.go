@@ -67,7 +67,7 @@ func main() {
 		query.Add("port", fmt.Sprint(*rpcPort))
 
 		if *casPath != "" {
-			query.Add("cas-port", fmt.Sprint(*casPort))
+			query.Add("storage_port", fmt.Sprint(*casPort))
 		}
 
 		announceUrl := url.URL{
