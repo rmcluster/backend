@@ -48,5 +48,5 @@ done
 
 sleep 1
 
-"$DOCKER" pull "$LITMUS_DOCKER_IMAGE"
-"$DOCKER" run -it --rm --net host "$LITMUS_DOCKER_IMAGE" dav://localhost:4917/dav 2>&1 | tee "$RESULTS_DIR/litmus.log"
+# "$DOCKER" pull "$LITMUS_DOCKER_IMAGE"
+"$DOCKER" run -it --rm --net host "$LITMUS_DOCKER_IMAGE" -k dav://localhost:4917/dav 2>&1 | tee "$RESULTS_DIR/litmus.log"
