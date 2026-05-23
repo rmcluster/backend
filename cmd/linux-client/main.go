@@ -25,6 +25,7 @@ func main() {
 	casPath := flag.String("cas-path", "", "path to the CAS directory. If empty, CAS is disabled.")
 	casPort := flag.Int("cas-port", 1985, "port to run the CAS server on")
 	rpcCommand := flag.String("cmd", "rpc-server", "command to run the RPC server")
+	announceIp := flag.String("announce-ip", "", "ip address to announce to the tracker")
 	flag.Parse()
 
 	if *id == "" {
@@ -65,6 +66,10 @@ func main() {
 		query := make(url.Values)
 		query.Add("id", *id)
 		query.Add("port", fmt.Sprint(*rpcPort))
+
+		if *announceIp != "" {
+			query.Add("ip", *announceIp)
+		}
 
 		if *casPath != "" {
 			query.Add("cas-port", fmt.Sprint(*casPort))
