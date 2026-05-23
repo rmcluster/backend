@@ -17,6 +17,22 @@ func NewHomepage() *Homepage {
 }
 
 func (h *Homepage) HandleHomepage(w http.ResponseWriter, r *http.Request) {
+
+	switch r.Method {
+	case http.MethodGet:
+		// handled below
+
+	case http.MethodOptions:
+		w.Header().Del("Access-Control-Allow-Methods")
+		w.Header().Set("Access-Control-Allow-Methods", "GET")
+		w.WriteHeader(http.StatusOK)
+		return
+
+	default:
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
 	homepageTempl().Render(r.Context(), w)
 }
 
