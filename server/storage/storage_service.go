@@ -77,9 +77,7 @@ func (s *StorageServiceImpl) GarbageCollect(ctx context.Context) error {
 			continue
 		}
 		if err := s.gcas.Delete(ctx, h); err != nil {
-			var nf gcas.HashNotFoundError
-
-			if errors.As(err, &nf) {
+			if errors.Is(err, gcas.HashNotFoundError{}) {
 				continue
 			}
 			return fmt.Errorf("delete GCAS hash %x: %w", h, err)
