@@ -1,12 +1,16 @@
 package schedulersubscriber
 
-import "github.com/wk-y/rama-swap/microservices/scheduling"
+import (
+	"sync/atomic"
+
+	"github.com/wk-y/rama-swap/microservices/scheduling"
+)
 
 type node struct {
 	id      string
 	ip      string
 	port    int
-	maxSize int64
+	maxSize atomic.Int64
 }
 
 // Id implements [scheduling.Node].
@@ -26,7 +30,11 @@ func (n *node) Port() int {
 
 // MaxSize implements [scheduling.Node].
 func (n *node) MaxSize() int64 {
-	return n.maxSize
+	return n.maxSize.Load()
+}
+
+func (n *node) setMaxSize(maxSize int64) {
+	n.maxSize.Store(maxSize)
 }
 
 var _ scheduling.Node = (*node)(nil)

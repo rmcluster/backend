@@ -167,7 +167,8 @@ func newProcessLogWriter(model string, stream string, onLine func(string)) *proc
 var reProgressPct = regexp.MustCompile(`(\d+(?:\.\d+)?)%`)
 
 // reOffloadLayers matches lines like "llm_load_tensors: offloading 32 repeating layers to GPU"
-// and "llm_load_tensors: offloaded 32/33 layers to GPU"
+// and "llm_load_tensors: offloaded 32/33 layers to GPU".
+// We keep the parser broad and let the UI decide the final device-neutral label.
 var reOffloadLayers = regexp.MustCompile(`offload(?:ing|ed)\s+(\d+)`)
 
 func (w *processLogWriter) Write(p []byte) (int, error) {
@@ -206,7 +207,7 @@ func (w *processLogWriter) Write(p []byte) (int, error) {
 }
 
 // makePhaseDetector returns an onLine hook that calls phaseCb whenever a known
-// loading phase is detected, and layersCb when the GPU offload count is known.
+// loading phase is detected, and layersCb when the offloaded-layer count is known.
 func makePhaseDetector(model string, phaseCb func(model, phase string, progress float64), layersCb func(int)) func(string) {
 	if phaseCb == nil && layersCb == nil {
 		return nil

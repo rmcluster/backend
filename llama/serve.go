@@ -3,6 +3,7 @@ package llama
 import (
 	"context"
 	"fmt"
+	"log"
 	"os/exec"
 	"slices"
 	"strings"
@@ -31,14 +32,14 @@ func (c Llama) ServeCommand(ctx context.Context, args ServeArgs) *exec.Cmd {
 		sep = ","
 	}
 
-	// offloadLayers := 8
-	// if args.OffloadLayers != nil {
-	// 	offloadLayers = *args.OffloadLayers
-	// }
+	offloadLayers := 0
+	if args.OffloadLayers != nil {
+		offloadLayers = *args.OffloadLayers
+	}
 
 	// -c 4096: cap context window so KV cache stays ~140 MB on phone instead of
 	// the model's default (32K-64K ctx = 4+ GB KV cache that OOMs the phone).
-	cliArgs = append(cliArgs, "-ngl", "99", "-c", "4096", "--rpc", nodes.String())
+	cliArgs = append(cliArgs, "-ngl", fmt.Sprint(offloadLayers), "-c", "4096", "--rpc", nodes.String())
 
 	if args.Alias != nil {
 		cliArgs = append(cliArgs, "-n", *args.Alias)
@@ -46,9 +47,19 @@ func (c Llama) ServeCommand(ctx context.Context, args ServeArgs) *exec.Cmd {
 
 	cliArgs = append(cliArgs, "--port", fmt.Sprint(args.Port))
 
-	// temporary: if model name starts with hf: use -hf to load huggingface model
+	// Prefer a fully cached local GGUF path when available. This keeps launches
+	// deterministic and avoids relying on the runtime Hugging Face resolution
+	// path once a model has already been downloaded.
 	if strings.HasPrefix(args.Model, "hf:") {
-		cliArgs = append(cliArgs, "-hf", args.Model[3:])
+		if cachedPath, ok, err := resolveCachedHFModelPath(args.Model); err == nil && ok {
+			log.Printf("Using cached Hugging Face model for %s at %s", args.Model, cachedPath)
+			cliArgs = append(cliArgs, "--model", cachedPath)
+		} else {
+			if err != nil {
+				log.Printf("Failed to inspect Hugging Face cache for %s: %v", args.Model, err)
+			}
+			cliArgs = append(cliArgs, "-hf", args.Model[3:])
+		}
 	} else {
 		cliArgs = append(cliArgs, "--model", args.Model)
 	}

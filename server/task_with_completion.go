@@ -24,6 +24,14 @@ func (t *taskWithCompletion) Fail(err error) {
 	t.inner.Fail(err)
 }
 
+func (t *taskWithCompletion) SetAllocatedNodes(nodes []scheduling.Node) {
+	awareTask, ok := t.inner.(scheduling.AllocatedNodesAwareTask)
+	if !ok {
+		return
+	}
+	awareTask.SetAllocatedNodes(nodes)
+}
+
 func newTaskWithCompletion(task scheduling.Task) *taskWithCompletion {
 	return &taskWithCompletion{
 		inner: task,
@@ -32,3 +40,4 @@ func newTaskWithCompletion(task scheduling.Task) *taskWithCompletion {
 }
 
 var _ scheduling.Task = (*taskWithCompletion)(nil)
+var _ scheduling.AllocatedNodesAwareTask = (*taskWithCompletion)(nil)

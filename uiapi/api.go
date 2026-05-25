@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wk-y/rama-swap/tracker"
 )
 
 // ---- API types ----
@@ -75,6 +76,35 @@ type connectInfoResponse struct {
 	Token                 string `json:"token"`
 	ConnectURI            string `json:"connect_uri"`
 	TokenExpiresInSeconds int    `json:"token_expires_in_seconds"`
+}
+
+type parallelismTargetResponse struct {
+	ParallelismTarget int `json:"parallelism_target"`
+}
+
+type parallelismTargetRequest struct {
+	ParallelismTarget int `json:"parallelism_target"`
+}
+
+type storageChunkSizeResponse struct {
+	ChunkSizeBytes int64 `json:"chunk_size_bytes"`
+}
+
+type storageChunkSizeRequest struct {
+	ChunkSizeBytes int64 `json:"chunk_size_bytes"`
+}
+
+type allocationDevice struct {
+	NodeID        string `json:"node_id"`
+	IP            string `json:"ip"`
+	Port          int    `json:"port"`
+	HardwareModel string `json:"hardware_model"`
+	Label         string `json:"label"`
+}
+
+type allocationsResponse struct {
+	Model   string             `json:"model"`
+	Devices []allocationDevice `json:"devices"`
 }
 
 // ---- Chat session types ----
@@ -591,20 +621,148 @@ func (s *UIApi) handleAPILocalModelUpload(w http.ResponseWriter, r *http.Request
 
 func (s *UIApi) handleLoadingStatus(w http.ResponseWriter, r *http.Request) {
 	type response struct {
-		Model       string  `json:"model"`
-		Phase       string  `json:"phase"`
-		Progress    float64 `json:"progress"`
-		LayersOnGpu int     `json:"layers_on_gpu"`
-		NodeCount   int     `json:"node_count"`
+		Model           string  `json:"model"`
+		Phase           string  `json:"phase"`
+		Progress        float64 `json:"progress"`
+		LayersOnGpu     int     `json:"layers_on_gpu"`
+		LayersOffloaded int     `json:"layers_offloaded"`
+		NodeCount       int     `json:"node_count"`
 	}
 
 	var resp response
 	if s.loadingStatus != nil {
 		resp.Model, resp.Phase, resp.Progress, resp.LayersOnGpu = s.loadingStatus.GetLoadingStatus()
+		resp.LayersOffloaded = resp.LayersOnGpu
 	}
 	resp.NodeCount = len(s.tracker.GetServers())
 
 	writeAPIJSON(w, http.StatusOK, resp)
+}
+
+func (s *UIApi) handleParallelismTarget(w http.ResponseWriter, r *http.Request) {
+	if s.scheduler == nil {
+		writeAPIError(w, http.StatusNotImplemented, "scheduler controls unavailable")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		writeAPIJSON(w, http.StatusOK, parallelismTargetResponse{
+			ParallelismTarget: s.scheduler.GetParallelismTarget(),
+		})
+	case http.MethodPost:
+		var req parallelismTargetRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		connectedNodes := len(s.tracker.GetServers())
+		if connectedNodes < 1 {
+			writeAPIError(w, http.StatusBadRequest, "parallelism_target cannot be set while no nodes are connected")
+			return
+		}
+		if req.ParallelismTarget < 1 || req.ParallelismTarget > connectedNodes {
+			writeAPIError(
+				w,
+				http.StatusBadRequest,
+				fmt.Sprintf("parallelism_target must be between 1 and %d", connectedNodes),
+			)
+			return
+		}
+		s.scheduler.SetParallelismTarget(req.ParallelismTarget)
+		writeAPIJSON(w, http.StatusOK, parallelismTargetResponse{
+			ParallelismTarget: s.scheduler.GetParallelismTarget(),
+		})
+	default:
+		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *UIApi) handleStorageChunkSize(w http.ResponseWriter, r *http.Request) {
+	if s.storage == nil {
+		writeAPIError(w, http.StatusNotImplemented, "storage chunk controls unavailable")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		writeAPIJSON(w, http.StatusOK, storageChunkSizeResponse{
+			ChunkSizeBytes: s.storage.GetChunkSize(),
+		})
+	case http.MethodPost:
+		var req storageChunkSizeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if err := s.storage.SetChunkSize(req.ChunkSizeBytes); err != nil {
+			writeAPIError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, storageChunkSizeResponse{
+			ChunkSizeBytes: s.storage.GetChunkSize(),
+		})
+	default:
+		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *UIApi) handleAllocations(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.scheduler == nil {
+		writeAPIError(w, http.StatusNotImplemented, "scheduler allocations unavailable")
+		return
+	}
+
+	model := strings.TrimSpace(r.URL.Query().Get("model"))
+	if model == "" {
+		writeAPIError(w, http.StatusBadRequest, "model is required")
+		return
+	}
+
+	servers := s.tracker.GetServers()
+	serverByAddress := make(map[string]tracker.RpcServerInfo, len(servers))
+	for _, server := range servers {
+		key := server.Ip + ":" + strconv.Itoa(server.Port)
+		serverByAddress[key] = server
+	}
+
+	nodeIDs := s.scheduler.GetAllocatedNodesForModel(model)
+	resp := allocationsResponse{
+		Model:   model,
+		Devices: make([]allocationDevice, 0, len(nodeIDs)),
+	}
+	for _, nodeID := range nodeIDs {
+		device := allocationDevice{NodeID: nodeID, Label: nodeID}
+		if server, ok := serverByAddress[nodeID]; ok {
+			device.IP = server.Ip
+			device.Port = server.Port
+			device.HardwareModel = server.HardwareModel
+			device.Label = server.HardwareModel
+			if device.Label == "" {
+				device.Label = nodeID
+			}
+		}
+		resp.Devices = append(resp.Devices, device)
+	}
+
+	writeAPIJSON(w, http.StatusOK, resp)
+}
+
+func (s *UIApi) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.metrics == nil {
+		writeAPIError(w, http.StatusNotImplemented, "metrics unavailable")
+		return
+	}
+
+	writeAPIJSON(w, http.StatusOK, s.metrics.Snapshot())
 }
 
 func (s *UIApi) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {

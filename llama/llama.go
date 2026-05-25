@@ -28,7 +28,6 @@ func (c Llama) GetModels() ([]Model, error) {
 		{Name: "hf:unsloth/Llama-3.2-1B-Instruct-GGUF:Llama-3.2-1B-Instruct-Q4_K_M.gguf"},
 		// ~1.5-2B
 		{Name: "hf:unsloth/Qwen3-1.7B-GGUF:Qwen3-1.7B-Q4_K_M.gguf"},
-		{Name: "hf:unsloth/Qwen2.5-1.5B-Instruct-GGUF:Qwen2.5-1.5B-Instruct-Q4_K_M.gguf"},
 		{Name: "hf:unsloth/SmolLM2-1.7B-Instruct-GGUF:SmolLM2-1.7B-Instruct-Q4_K_M.gguf"},
 		// ~1.5B (reasoning)
 		{Name: "hf:unsloth/DeepSeek-R1-Distill-Qwen-1.5B-GGUF:DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf"},

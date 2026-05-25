@@ -39,11 +39,14 @@ func (s *SchedulerSubscriber) OnNodeUpdated(node tracker.RpcServerInfo) {
 
 	convertedNode := convertTrackerNode(node)
 
-	if oldNode.ip != convertedNode.ip || oldNode.port != convertedNode.port || oldNode.maxSize != convertedNode.maxSize {
+	if oldNode.ip != convertedNode.ip || oldNode.port != convertedNode.port {
 		s.scheduler.OnNodeDisconnect(oldNode)
 		s.scheduler.OnNodeConnect(convertedNode)
 		s.nodes[node.Id] = convertedNode
+		return
 	}
+
+	oldNode.setMaxSize(node.MaxSize)
 }
 
 func (s *SchedulerSubscriber) OnNodeAdded(trackerNode tracker.RpcServerInfo) {
@@ -66,12 +69,13 @@ func (s *SchedulerSubscriber) OnNodeRemoved(trackerNode tracker.RpcServerInfo) {
 }
 
 func convertTrackerNode(trackerNode tracker.RpcServerInfo) *node {
-	return &node{
-		id:      trackerNode.Ip + ":" + strconv.Itoa(trackerNode.Port),
-		ip:      trackerNode.Ip,
-		port:    trackerNode.Port,
-		maxSize: trackerNode.MaxSize,
+	converted := &node{
+		id:   trackerNode.Ip + ":" + strconv.Itoa(trackerNode.Port),
+		ip:   trackerNode.Ip,
+		port: trackerNode.Port,
 	}
+	converted.setMaxSize(trackerNode.MaxSize)
+	return converted
 }
 
 var _ tracker.TrackerSubscriber = (*SchedulerSubscriber)(nil)

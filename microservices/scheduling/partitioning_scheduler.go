@@ -3,6 +3,9 @@ package scheduling
 import (
 	"log"
 	"math"
+	"slices"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -23,7 +26,6 @@ type instanceInfo struct {
 	usedNodes []Node
 }
 
-
 type TaskCompletionMessage struct {
 	instanceInfo
 	task Task
@@ -41,14 +43,15 @@ func NewPartitioningScheduler(instanceFactory InstanceFactory, parallelismTarget
 		unallocatedNodes:   make(map[string]Node),
 		allocatedNodes:     make(map[string]NodeAllocationInfo),
 		idleInstances:      make(map[string][]instanceInfo),
-		newTasksChan:      make(chan Task, 16),
-		nodeEventChan:     make(chan NodeEvent, 16),
+		newTasksChan:       make(chan Task, 16),
+		nodeEventChan:      make(chan NodeEvent, 16),
 		taskCancelledChan:  make(chan Task, 16),
 		taskCompletedChan:  make(chan TaskCompletionMessage, 16),
 		instanceDeadChan:   make(chan instanceInfo, 16),
-		parallelismTarget:  parallelismTarget,
 		idleBias:           10 * time.Second,
+		allocationSnapshot: make(map[string][]string),
 	}
+	scheduler.parallelismTarget.Store(int32(max(parallelismTarget, 1)))
 	go scheduler.run()
 	return scheduler
 }
@@ -71,8 +74,11 @@ type PartitioningScheduler struct {
 	unallocatedNodes  map[string]Node
 	allocatedNodes    map[string]NodeAllocationInfo
 	idleInstances     map[string][]instanceInfo
-	parallelismTarget int           // target for how many nodes to allocate per instance
+	parallelismTarget atomic.Int32  // target for how many nodes to allocate per instance
 	idleBias          time.Duration // how many seconds of "advantage" tasks for an idle instance gets
+
+	allocationSnapshotMu sync.RWMutex
+	allocationSnapshot   map[string][]string
 
 	// channels for the different notification types
 	newTasksChan      chan Task
@@ -113,6 +119,35 @@ func (s *PartitioningScheduler) OnNodeDisconnect(node Node) {
 // OnTaskCancelled implements [Scheduler].
 func (s *PartitioningScheduler) OnTaskCancelled(task Task) {
 	s.taskCancelledChan <- task
+}
+
+func (s *PartitioningScheduler) GetParallelismTarget() int {
+	return int(s.parallelismTarget.Load())
+}
+
+func (s *PartitioningScheduler) SetParallelismTarget(n int) {
+	if n < 1 {
+		n = 1
+	}
+	s.parallelismTarget.Store(int32(n))
+	log.Printf("PartitioningScheduler: parallelism target set to %d", n)
+}
+
+func (s *PartitioningScheduler) SnapshotAllocations() map[string][]string {
+	s.allocationSnapshotMu.RLock()
+	defer s.allocationSnapshotMu.RUnlock()
+
+	snapshot := make(map[string][]string, len(s.allocationSnapshot))
+	for model, nodes := range s.allocationSnapshot {
+		snapshot[model] = slices.Clone(nodes)
+	}
+	return snapshot
+}
+
+func (s *PartitioningScheduler) GetAllocatedNodesForModel(model string) []string {
+	s.allocationSnapshotMu.RLock()
+	defer s.allocationSnapshotMu.RUnlock()
+	return slices.Clone(s.allocationSnapshot[model])
 }
 
 func (s *PartitioningScheduler) run() {
@@ -164,11 +199,23 @@ taskHandlerLoop:
 		for len(s.idleInstances[task.Model()]) > 0 { // assign to the idle instanceInfo
 			instanceInfo := s.idleInstances[task.Model()][0]
 			s.idleInstances[task.Model()] = s.idleInstances[task.Model()][1:]
+			target := s.GetParallelismTarget()
 
 			if !s.checkInstanceNodesStillOk(instanceInfo) {
 				s.killInstance(instanceInfo)
 				continue
 			}
+			if !s.instanceMatchesTarget(instanceInfo, target) {
+				log.Printf(
+					"PartitioningScheduler: discarding idle instance for model %s with %d nodes; target is %d",
+					task.Model(),
+					len(instanceInfo.usedNodes),
+					target,
+				)
+				s.killInstance(instanceInfo)
+				continue
+			}
+			s.attachAllocatedNodes(task, instanceInfo.usedNodes)
 
 			go func() {
 				defer func() {
@@ -184,7 +231,8 @@ taskHandlerLoop:
 		}
 
 		// can we create a new instance?
-		if len(s.unallocatedNodes) == 0 {
+		target := s.GetParallelismTarget()
+		if len(s.unallocatedNodes) < target {
 			// can we kill any idle instances?
 		killLoop:
 			for _, instances := range s.idleInstances {
@@ -198,23 +246,26 @@ taskHandlerLoop:
 						}
 					}
 
-					if len(s.unallocatedNodes) >= s.parallelismTarget {
+					if len(s.unallocatedNodes) >= target {
 						break killLoop
 					}
 				}
 			}
 		}
 
-		for len(s.unallocatedNodes) == 0 {
+		for len(s.unallocatedNodes) < target {
 			select {
 			case nodeEvent := <-s.nodeEventChan:
 				s.handleNodeEvent(nodeEvent)
 			case task := <-s.taskCancelledChan:
 				s.handleTaskCancellation(task)
 			case completion := <-s.taskCompletedChan:
-				if completion.instanceInfo.instance.Model() == task.Model() && s.checkInstanceNodesStillOk(completion.instanceInfo) {
+				if completion.instanceInfo.instance.Model() == task.Model() &&
+					s.checkInstanceNodesStillOk(completion.instanceInfo) &&
+					s.instanceMatchesTarget(completion.instanceInfo, target) {
 					// reuse the instance
 					instanceInfo := completion.instanceInfo
+					s.attachAllocatedNodes(task, instanceInfo.usedNodes)
 					go func() {
 						defer func() {
 							s.taskCompletedChan <- TaskCompletionMessage{
@@ -235,9 +286,23 @@ taskHandlerLoop:
 		nodes := []Node{}
 		for _, node := range s.unallocatedNodes {
 			nodes = append(nodes, node)
-			if len(nodes) == s.parallelismTarget {
-				break
+		}
+		slices.SortFunc(nodes, func(a, b Node) int {
+			switch {
+			case a.MaxSize() > b.MaxSize():
+				return -1
+			case a.MaxSize() < b.MaxSize():
+				return 1
+			case a.Id() < b.Id():
+				return -1
+			case a.Id() > b.Id():
+				return 1
+			default:
+				return 0
 			}
+		})
+		if len(nodes) > target {
+			nodes = nodes[:target]
 		}
 
 		log.Printf("PartitioningScheduler: starting model %s with %d nodes", task.Model(), len(nodes))
@@ -266,6 +331,8 @@ taskHandlerLoop:
 			}
 			delete(s.unallocatedNodes, node.Id())
 		}
+		s.refreshAllocationSnapshot()
+		s.attachAllocatedNodes(task, nodes)
 
 		go func() {
 			defer func() {
@@ -317,6 +384,7 @@ func (s *PartitioningScheduler) handleNodeConnect(node Node) {
 func (s *PartitioningScheduler) handleNodeDisconnect(node Node) {
 	delete(s.unallocatedNodes, node.Id())
 	delete(s.allocatedNodes, node.Id())
+	s.refreshAllocationSnapshot()
 }
 
 func (s *PartitioningScheduler) handleTaskCompletion(taskCompletionMessage TaskCompletionMessage) {
@@ -345,6 +413,7 @@ func (s *PartitioningScheduler) killInstance(instanceInfo instanceInfo) {
 			s.unallocatedNodes[node.Id()] = node
 		}
 	}
+	s.refreshAllocationSnapshot()
 }
 
 func (s *PartitioningScheduler) checkInstanceNodesStillOk(instanceInfo instanceInfo) bool {
@@ -354,6 +423,18 @@ func (s *PartitioningScheduler) checkInstanceNodesStillOk(instanceInfo instanceI
 		}
 	}
 	return true
+}
+
+func (s *PartitioningScheduler) instanceMatchesTarget(instanceInfo instanceInfo, target int) bool {
+	return len(instanceInfo.usedNodes) == target
+}
+
+func (s *PartitioningScheduler) attachAllocatedNodes(task Task, nodes []Node) {
+	awareTask, ok := task.(AllocatedNodesAwareTask)
+	if !ok {
+		return
+	}
+	awareTask.SetAllocatedNodes(slices.Clone(nodes))
 }
 
 // scoreTask returns a score for a task. Higher scores are prioritized.
@@ -367,6 +448,21 @@ func (s *PartitioningScheduler) scoreTask(task *timestampedTask, now time.Time) 
 	}
 
 	return score
+}
+
+func (s *PartitioningScheduler) refreshAllocationSnapshot() {
+	snapshot := make(map[string][]string)
+	for nodeID, info := range s.allocatedNodes {
+		model := info.instance.Model()
+		snapshot[model] = append(snapshot[model], nodeID)
+	}
+	for model := range snapshot {
+		slices.Sort(snapshot[model])
+	}
+
+	s.allocationSnapshotMu.Lock()
+	s.allocationSnapshot = snapshot
+	s.allocationSnapshotMu.Unlock()
 }
 
 var _ Scheduler = (*PartitioningScheduler)(nil)

@@ -2,3 +2,11 @@
 .env
 gcas.db
 rmd
+*.gguf
+*.ggml
+*.log
+gcasdb
+gcasdb-*
+storagedb
+storagedb-*
+*.deb

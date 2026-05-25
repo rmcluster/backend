@@ -32,3 +32,10 @@ type Task interface {
 	PerformInference(instance Instance) error
 	Fail(err error)
 }
+
+// AllocatedNodesAwareTask is an optional extension that lets the scheduler
+// attach the concrete nodes assigned to a task before inference begins.
+type AllocatedNodesAwareTask interface {
+	Task
+	SetAllocatedNodes([]Node)
+}

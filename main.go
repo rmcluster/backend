@@ -14,6 +14,7 @@ import (
 	"github.com/wk-y/rama-swap/llama"
 	"github.com/wk-y/rama-swap/microservices/dashboard"
 	"github.com/wk-y/rama-swap/microservices/homepage"
+	"github.com/wk-y/rama-swap/microservices/metrics"
 	"github.com/wk-y/rama-swap/microservices/scheduling"
 	"github.com/wk-y/rama-swap/microservices/webdavservice"
 	"github.com/wk-y/rama-swap/server"
@@ -122,6 +123,7 @@ func main() {
 
 	factory := scheduling.NewInstanceFactory(&ramalama, 49170)
 	loadingTracker := &scheduling.LoadingStatusTracker{}
+	metricsCollector := metrics.NewCollector(500)
 	if setter, ok := factory.(scheduling.PhaseCallbackSetter); ok {
 		setter.SetPhaseCallback(loadingTracker.OnPhaseUpdate)
 		setter.SetLayersCallback(loadingTracker.OnLayersKnown)
@@ -130,12 +132,12 @@ func main() {
 	tracker.DefaultTracker.Subscribe(schedulersubscriber.NewSchedulerSubscriber(scheduler))
 	cas := gcas.NewGCAS(gcasdb)
 	tracker.DefaultTracker.Subscribe(gcassubscriber.NewGCASSubscriber(cas))
-	server := server.NewServer(ramalama, scheduler)
+	server := server.NewServer(ramalama, scheduler, metricsCollector)
 	dashboard := dashboard.NewDashboard(tracker.DefaultTracker)
 	dashboard.RegisterHandlers(mux)
 	homepage := homepage.NewHomepage()
 	homepage.RegisterHandlers(mux)
-	ui := uiapi.New(tracker.DefaultTracker, ramalama, loadingTracker)
+	ui := uiapi.New(tracker.DefaultTracker, ramalama, loadingTracker, scheduler, storageSvc, metricsCollector)
 	ui.RegisterHandlers(mux)
 
 	if args.Storagedb == nil {
