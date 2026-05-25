@@ -18,13 +18,13 @@ type UIApi struct {
 	tracker       *tracker.Tracker
 	llama         llama.Llama
 	loadingStatus scheduling.LoadingStatusProvider // may be nil
+	powerMetrics  powerMetricProvider
 
 	connectLock   sync.Mutex
 	connectTokens map[string]time.Time
 	chatLock      sync.Mutex
-	chatSessions   map[string]chatSessionRecord
+	chatSessions  map[string]chatSessionRecord
 }
-
 
 var (
 	hfStoreOnce sync.Once
@@ -34,9 +34,10 @@ var (
 func New(tracker *tracker.Tracker, llama llama.Llama, loadingStatus scheduling.LoadingStatusProvider) *UIApi {
 	initHFMetadataStoreFromEnv()
 	return &UIApi{
-		tracker:        tracker,
-		llama:          llama,
-		loadingStatus:  loadingStatus,
+		tracker:       tracker,
+		llama:         llama,
+		loadingStatus: loadingStatus,
+		powerMetrics:  newPowerMetricProviderFromEnv(),
 		connectTokens: make(map[string]time.Time),
 		chatSessions:  make(map[string]chatSessionRecord),
 	}

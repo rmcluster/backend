@@ -448,6 +448,18 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DashboardServer'
+        power_watts:
+          type: number
+          nullable: true
+          description: Current external power reading in watts, when configured
+        voltage:
+          type: number
+          nullable: true
+          description: Current external voltage reading, when configured
+        current:
+          type: number
+          nullable: true
+          description: Current external amperage reading, when configured
 
     Model:
       type: object

@@ -1,6 +1,7 @@
 package uiapi
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -15,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
 )
 
 // ---- API types ----
@@ -66,7 +66,10 @@ type dashboardServerSnapshot struct {
 }
 
 type dashboardDataResponse struct {
-	Servers []dashboardServerSnapshot `json:"servers"`
+	Servers    []dashboardServerSnapshot `json:"servers"`
+	PowerWatts *float64                  `json:"power_watts,omitempty"`
+	Voltage    *float64                  `json:"voltage,omitempty"`
+	Current    *float64                  `json:"current,omitempty"`
 }
 
 type connectInfoResponse struct {
@@ -635,6 +638,16 @@ func (s *UIApi) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {
 			snapshot.Temperature = &value
 		}
 		payload.Servers = append(payload.Servers, snapshot)
+	}
+
+	if s.powerMetrics != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if metrics, err := s.powerMetrics.CurrentMetrics(ctx); err == nil {
+			payload.PowerWatts = metrics.PowerWatts
+			payload.Voltage = metrics.Voltage
+			payload.Current = metrics.Current
+		}
 	}
 
 	writeAPIJSON(w, http.StatusOK, payload)
