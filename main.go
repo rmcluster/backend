@@ -137,8 +137,6 @@ func main() {
 	dashboard.RegisterHandlers(mux)
 	homepage := homepage.NewHomepage()
 	homepage.RegisterHandlers(mux)
-	ui := uiapi.New(tracker.DefaultTracker, ramalama, loadingTracker, scheduler, storageSvc, metricsCollector)
-	ui.RegisterHandlers(mux)
 
 	if args.Storagedb == nil {
 		log.Fatalf("No storage database specified")
@@ -156,6 +154,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create storage service: %v", err)
 	}
+	ui := uiapi.New(tracker.DefaultTracker, ramalama, loadingTracker, scheduler, storageSvc, metricsCollector)
+	ui.RegisterHandlers(mux)
 	webdavService := webdavservice.NewWebDavService(storageSvc)
 	webdavService.RegisterGinHandlers(router)
 
