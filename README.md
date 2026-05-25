@@ -45,3 +45,33 @@ Replace `127.0.0.1:4917` with the ip and port of the tracker.
 ```sh
 go run ./cmd/linux-client/ -cmd /path/to/rpc-server -tracker 127.0.0.1:4917 -- -c
 ```
+
+## Storage Benchmarks
+
+The storage benchmark runner automates two experiments:
+
+- `devices vs upload time` using each phone's native `/chunk` API
+- `chunk size vs download time` using the server `/dav` WebDAV layer and `/api/ui/storage-chunk-size`
+
+Prerequisites:
+
+- the rmcluster server is already running
+- one or more storage-capable devices are connected and announcing to the tracker
+- Python has `requests` and `matplotlib` available
+
+Example:
+
+```sh
+python3 scripts/storage_bench.py \
+  --server-url http://127.0.0.1:4917 \
+  --file-size-mib 10 \
+  --repetitions 3
+```
+
+Artifacts are written to a timestamped directory under `server/benchmarks/results/`, for example:
+
+- `devices_vs_upload_time.png`
+- `chunk_size_vs_download_time.png`
+- `devices_vs_upload_time.csv`
+- `chunk_size_vs_download_time.csv`
+- `run_metadata.json`
