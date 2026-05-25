@@ -102,7 +102,7 @@ func (f *writeFile) flushChunk() error {
 	size := int64(len(f.buf))
 
 	if err := f.gcas.Put(f.ctx, hash, f.buf); err != nil {
-		var exists *gcas.HashExistsError
+		var exists gcas.HashExistsError
 		if !errors.As(err, &exists) {
 			return fmt.Errorf("gcas put chunk %d: %w", len(f.chunks), err)
 		}
