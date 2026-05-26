@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 
 
@@ -40,6 +42,50 @@ class RunBenchmarksHelpersTest(unittest.TestCase):
         self.assertEqual(rb.detect_cluster_scenario([{"hardware_model": "iPhone 15"}]), "ios_only")
         self.assertEqual(rb.detect_cluster_scenario([{"hardware_model": "SM-G900V"}]), "android_only")
         self.assertEqual(rb.detect_cluster_scenario([{"hardware_model": "iPhone 15"}, {"hardware_model": "SM-G900V"}]), "heterogeneous")
+
+    def test_enrich_result_prefers_server_tps(self) -> None:
+        enriched = rb.enrich_result(
+            {"started_at": 0.0, "first_token_at": 10.0, "completed_at": 20.0},
+            {"tokens_streamed": 11, "tokens_per_second": 7.5},
+        )
+        self.assertEqual(enriched["tps"], 7.5)
+        self.assertEqual(enriched["tokens_streamed"], 11)
+
+    def test_annotate_failure_marks_capacity_issue(self) -> None:
+        text = rb.annotate_failure("HTTP Error 503: Service Unavailable: instance died during startup on rpc nodes [...]")
+        self.assertIn("assumed insufficient RAM/capacity", text)
+
+    def test_run_streaming_chat_request_surfaces_server_error(self) -> None:
+        original = rb.urllib.request.urlopen
+
+        def fake_urlopen(*args, **kwargs):
+            raise urllib.error.HTTPError(
+                url="http://unused",
+                code=503,
+                msg="Service Unavailable",
+                hdrs=None,
+                fp=io.BytesIO(json.dumps({"error": "instance died during startup"}).encode("utf-8")),
+            )
+
+        import io
+
+        rb.urllib.request.urlopen = fake_urlopen
+        try:
+            with self.assertRaises(RuntimeError) as ctx:
+                rb.run_streaming_chat_request("http://unused", "demo-model", "hello", 0.0, 1, "test")
+            self.assertIn("instance died during startup", str(ctx.exception))
+        finally:
+            rb.urllib.request.urlopen = original
+
+    def test_run_streaming_chat_request_surfaces_client_timeout(self) -> None:
+        original = rb.urllib.request.urlopen
+        rb.urllib.request.urlopen = lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError())
+        try:
+            with self.assertRaises(RuntimeError) as ctx:
+                rb.run_streaming_chat_request("http://unused", "demo-model", "hello", 0.0, 1, "test")
+            self.assertIn(f"client timed out after {rb.REQUEST_TIMEOUT_S}s", str(ctx.exception))
+        finally:
+            rb.urllib.request.urlopen = original
 
     def test_render_line_plot_writes_png(self) -> None:
         if importlib.util.find_spec("matplotlib") is None:

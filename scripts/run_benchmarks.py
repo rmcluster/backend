@@ -8,6 +8,7 @@ import shutil
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 import uuid
 from collections import defaultdict
@@ -44,9 +45,12 @@ DEFAULT_MODELS = [
 BASE_URL = "http://127.0.0.1:4917"
 RESULTS_DIR = "benchmarks/results"
 RUN_LABEL = "benchmark-run"
-MODEL_LOAD_TIMEOUT_S = 420
+MODEL_LOAD_TIMEOUT_S = 90
 MODEL_LOAD_POLL_S = 2
-REQUEST_RETRY_LIMIT = 3
+REQUEST_RETRY_LIMIT = 1
+REQUEST_TIMEOUT_S = 300
+WARMUP_PROMPT = "Say hi."
+WARMUP_MAX_TOKENS = 1
 MODEL_SWEEP_CONFIG = {
     "models": DEFAULT_MODELS,
     "targets": "auto",
@@ -87,13 +91,16 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 def write_model_sweep_artifacts(out_dir: Path, rows: list[dict[str, Any]], details: list[dict[str, Any]]) -> None:
     write_json(out_dir / "model_sweep.json", details)
     write_csv(out_dir / "model_sweep.csv", rows)
-    write_plot(
-        out_dir / "model-sweep-tps.png",
-        "Tokens per Second by Parallelism Target",
-        "Parallelism Target",
-        "TPS",
-        grouped_means(rows, "parallelism_target", "tps"),
-    )
+    try:
+        write_plot(
+            out_dir / "model-sweep-tps.png",
+            "Tokens per Second by Parallelism Target",
+            "Parallelism Target",
+            "TPS",
+            grouped_means(rows, "parallelism_target", "tps"),
+        )
+    except ModuleNotFoundError:
+        pass
 
 
 def load_prompt_presets(path: Path = PRESETS_PATH) -> dict[str, Any]:
@@ -191,15 +198,33 @@ def run_streaming_chat_request(base_url: str, model: str, prompt: str, temperatu
         method="POST",
     )
     first_token_at, completion_chars, reasoning_chars = None, 0, 0
-    with urllib.request.urlopen(req, timeout=900) as response:
-        for event_payload in iter_sse_events(response):
-            for choice in json.loads(event_payload).get("choices", []):
-                delta = choice.get("delta", {})
-                content, reasoning = delta.get("content") or "", delta.get("reasoning_content") or ""
-                if (content or reasoning) and first_token_at is None:
-                    first_token_at = time.time()
-                completion_chars += len(content)
-                reasoning_chars += len(reasoning)
+    try:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_S) as response:
+            for event_payload in iter_sse_events(response):
+                for choice in json.loads(event_payload).get("choices", []):
+                    delta = choice.get("delta", {})
+                    content, reasoning = delta.get("content") or "", delta.get("reasoning_content") or ""
+                    if (content or reasoning) and first_token_at is None:
+                        first_token_at = time.time()
+                    completion_chars += len(content)
+                    reasoning_chars += len(reasoning)
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            payload = json.loads(exc.read().decode("utf-8"))
+            detail = str(payload.get("error") or "").strip()
+        except Exception:
+            detail = ""
+        message = f"HTTP Error {exc.code}: {exc.reason}"
+        if detail:
+            message = f"{message}: {detail}"
+        raise RuntimeError(message) from exc
+    except TimeoutError as exc:
+        raise RuntimeError(f"client timed out after {REQUEST_TIMEOUT_S}s waiting for streamed response") from exc
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, TimeoutError):
+            raise RuntimeError(f"client timed out after {REQUEST_TIMEOUT_S}s waiting for streamed response") from exc
+        raise
     completed = time.time()
     return {"request_id": request_id, "preset": preset_name, "started_at": started, "first_token_at": first_token_at, "completed_at": completed, "ttft_s": (first_token_at - started) if first_token_at is not None else None, "total_time_s": completed - started, "completion_chars": completion_chars, "reasoning_chars": reasoning_chars}
 
@@ -208,13 +233,24 @@ def workload_only_has_503s(workload: dict[str, Any]) -> bool:
     return bool(workload["errors"]) and not workload["results"] and all("503" in error for error in workload["errors"])
 
 
+def is_capacity_failure(message: str) -> bool:
+    text = message.lower()
+    return "instance died during startup" in text or "llama_kv_cache" in text or "buffer_clear" in text
+
+
+def annotate_failure(message: str) -> str:
+    if is_capacity_failure(message):
+        return f"{message} [assumed insufficient RAM/capacity for this model at this target]"
+    return message
+
+
 def enrich_result(result: dict[str, Any], metric: dict[str, Any] | None) -> dict[str, Any]:
     if not metric:
         return result | {"tokens_streamed": None, "generation_time_s": None, "tpot_s": None, "tps": None}
     generation_time_s = result["completed_at"] - result["first_token_at"] if result.get("first_token_at") is not None else None
     tokens = metric.get("tokens_streamed")
     tpot_s = generation_time_s / (tokens - 1) if generation_time_s is not None and tokens and tokens > 1 else None
-    return result | {"tokens_streamed": tokens, "generation_time_s": generation_time_s, "tpot_s": tpot_s, "tps": (1.0 / tpot_s) if tpot_s and tpot_s > 0 else None, "server_metric": metric}
+    return result | {"tokens_streamed": tokens, "generation_time_s": generation_time_s, "tpot_s": tpot_s, "tps": metric.get("tokens_per_second"), "server_metric": metric}
 
 
 def run_parallel_chat_workload(base_url: str, model: str, prompt: str, queries: int, concurrency: int, temperature: float, max_completion_tokens: int, preset_name: str) -> dict[str, Any]:
@@ -247,15 +283,31 @@ def run_parallel_chat_workload(base_url: str, model: str, prompt: str, queries: 
     return {"summary": {"queries": queries, "concurrency": concurrency, "wall_time_s": time.time() - started, "avg_ttft_s": sum(ttfts) / len(ttfts) if ttfts else None, "avg_tps": sum(tps_values) / len(tps_values) if tps_values else None, "error_count": len(errors)}, "results": enriched, "errors": errors, "server_metrics_before": before, "server_metrics_after": after}
 
 
+def warm_up_model(base_url: str, model: str) -> None:
+    run_streaming_chat_request(base_url, model, WARMUP_PROMPT, 0.0, WARMUP_MAX_TOKENS, "warmup")
+
+
 def run_chat_workload_with_retries(base_url: str, model: str, prompt: str, queries: int, concurrency: int, temperature: float, max_completion_tokens: int, preset_name: str) -> tuple[dict[str, Any], dict[str, Any]]:
     loading = wait_for_loading(base_url, model)
-    workload = run_parallel_chat_workload(base_url, model, prompt, queries, concurrency, temperature, max_completion_tokens, preset_name)
-    for _ in range(REQUEST_RETRY_LIMIT):
+    last_error = ""
+    for attempt in range(REQUEST_RETRY_LIMIT + 1):
+        try:
+            warm_up_model(base_url, model)
+            loading = wait_for_loading(base_url, model)
+            workload = run_parallel_chat_workload(base_url, model, prompt, queries, concurrency, temperature, max_completion_tokens, preset_name)
+        except Exception as exc:
+            last_error = annotate_failure(str(exc))
+            if attempt >= REQUEST_RETRY_LIMIT or "503" not in last_error or is_capacity_failure(last_error):
+                return {"summary": {"queries": queries, "concurrency": concurrency, "wall_time_s": 0.0, "avg_ttft_s": None, "avg_tps": None, "error_count": 1}, "results": [], "errors": [last_error], "server_metrics_before": {}, "server_metrics_after": {}}, loading
+            loading = wait_for_loading(base_url, model)
+            continue
         if not workload_only_has_503s(workload):
-            break
+            return workload, loading
+        last_error = annotate_failure("; ".join(workload["errors"]))
+        if is_capacity_failure(last_error):
+            return {"summary": {"queries": queries, "concurrency": concurrency, "wall_time_s": 0.0, "avg_ttft_s": None, "avg_tps": None, "error_count": 1}, "results": [], "errors": [last_error], "server_metrics_before": {}, "server_metrics_after": {}}, loading
         loading = wait_for_loading(base_url)
-        workload = run_parallel_chat_workload(base_url, model, prompt, queries, concurrency, temperature, max_completion_tokens, preset_name)
-    return workload, loading
+    return {"summary": {"queries": queries, "concurrency": concurrency, "wall_time_s": 0.0, "avg_ttft_s": None, "avg_tps": None, "error_count": 1}, "results": [], "errors": [last_error or "model instance failed to serve request"], "server_metrics_before": {}, "server_metrics_after": {}}, loading
 
 
 def sweep_row(series_label: str, model_id: str, target: int, scenario: str, workload: dict[str, Any] | None = None, error: str = "", loading_status: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -365,8 +417,6 @@ def main() -> int:
     run_dir.mkdir(parents=True, exist_ok=False)
     mplconfigdir, base_url = Path(tempfile.mkdtemp(prefix="run-benchmarks-mpl-")), BASE_URL.rstrip("/")
     os.environ["MPLCONFIGDIR"] = str(mplconfigdir)
-    import matplotlib
-    matplotlib.use("Agg")
     results: dict[str, Any] = {}
     write_run_metadata(run_dir, started_at, None, results, "running")
     try:

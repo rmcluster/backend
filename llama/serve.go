@@ -15,6 +15,8 @@ type ServeArgs struct {
 	Alias         *string
 	RpcNodes      []RpcNode
 	OffloadLayers *int
+	TensorSplit   []float64
+	NoHost        bool
 }
 
 type RpcNode struct {
@@ -40,6 +42,18 @@ func (c Llama) ServeCommand(ctx context.Context, args ServeArgs) *exec.Cmd {
 	// -c 4096: cap context window so KV cache stays ~140 MB on phone instead of
 	// the model's default (32K-64K ctx = 4+ GB KV cache that OOMs the phone).
 	cliArgs = append(cliArgs, "-ngl", fmt.Sprint(offloadLayers), "-c", "4096", "--rpc", nodes.String())
+	if len(args.TensorSplit) > 0 {
+		var split strings.Builder
+		sep = ""
+		for _, weight := range args.TensorSplit {
+			fmt.Fprintf(&split, "%s%.4f", sep, weight)
+			sep = ","
+		}
+		cliArgs = append(cliArgs, "--split-mode", "layer", "--tensor-split", split.String())
+	}
+	if args.NoHost {
+		cliArgs = append(cliArgs, "--no-host")
+	}
 
 	if args.Alias != nil {
 		cliArgs = append(cliArgs, "-n", *args.Alias)

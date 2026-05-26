@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -65,6 +66,10 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 		rpcNodeSummaries[idx] = formatNodeSummary(node)
 	}
 	log.Printf("Instance rpc nodes for model %s: %s", model, strings.Join(rpcNodeSummaries, ", "))
+	tensorSplit := chooseTensorSplit(nodes)
+	if len(tensorSplit) > 0 {
+		log.Printf("Instance tensor split for model %s: %s", model, formatTensorSplit(tensorSplit))
+	}
 
 	// find the lowest port that is not used
 	port := i.lowestPort
@@ -88,6 +93,8 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 			RpcNodes:      rpcNodes,
 			Port:          port,
 			OffloadLayers: &offloadLayers,
+			TensorSplit:   tensorSplit,
+			NoHost:        len(rpcNodes) > 0,
 		})
 		cmd.Stdout = newProcessLogWriter(model, "stdout", nil, startupLog.Add)
 		// i is already locked here — read callbacks directly, no re-lock
@@ -142,29 +149,51 @@ func formatNodeSummary(node Node) string {
 }
 
 func chooseOffloadLayers(nodes []Node) int {
-	const defaultOffloadLayers = 8
-	const minRemoteBufferBytes = 256 * 1024 * 1024
+	const defaultOffloadLayers = 99
+	if override := strings.TrimSpace(os.Getenv("LLAMA_OFFLOAD_LAYERS")); override != "" {
+		value, err := strconv.Atoi(override)
+		if err != nil {
+			log.Printf("Invalid LLAMA_OFFLOAD_LAYERS=%q; falling back to auto offload selection", override)
+		} else {
+			return value
+		}
+	}
 
 	if len(nodes) == 0 {
 		return 0
 	}
-
-	var smallestMaxSize int64 = -1
-	for _, node := range nodes {
-		maxSize := node.MaxSize()
-		if maxSize <= 0 {
-			continue
-		}
-		if smallestMaxSize < 0 || maxSize < smallestMaxSize {
-			smallestMaxSize = maxSize
-		}
-	}
-
-	if smallestMaxSize < 0 || smallestMaxSize < minRemoteBufferBytes {
-		return 0
-	}
-
 	return defaultOffloadLayers
+}
+
+func chooseTensorSplit(nodes []Node) []float64 {
+	if len(nodes) < 2 {
+		return nil
+	}
+
+	split := make([]float64, len(nodes))
+	var total float64
+	for idx, node := range nodes {
+		if node.MaxSize() <= 0 {
+			return nil
+		}
+		split[idx] = float64(node.MaxSize())
+		total += split[idx]
+	}
+	if total <= 0 {
+		return nil
+	}
+	for idx := range split {
+		split[idx] /= total
+	}
+	return split
+}
+
+func formatTensorSplit(split []float64) string {
+	parts := make([]string, len(split))
+	for idx, weight := range split {
+		parts[idx] = fmt.Sprintf("%.4f", weight)
+	}
+	return strings.Join(parts, ",")
 }
 
 type processLogWriter struct {
