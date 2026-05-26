@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -106,6 +107,15 @@ func main() {
 	ramalama := llama.Llama{
 		Command: args.Ramalama,
 	}
+	resolvedCommand := "<unresolved>"
+	if len(args.Ramalama) > 0 {
+		if path, err := exec.LookPath(args.Ramalama[0]); err == nil {
+			resolvedCommand = path
+		} else {
+			resolvedCommand = args.Ramalama[0]
+		}
+	}
+	log.Printf("Using llama command: %s (argv=%q)", resolvedCommand, args.Ramalama)
 
 	if args.Gcasdb == nil {
 		log.Fatalf("No GCAS database specified")

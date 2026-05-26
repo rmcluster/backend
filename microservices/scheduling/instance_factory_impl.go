@@ -3,6 +3,7 @@ package scheduling
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log"
 	"os/exec"
 	"regexp"
@@ -55,12 +56,15 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 
 	// build list of rpc nodes
 	rpcNodes := make([]llama.RpcNode, len(nodes))
+	rpcNodeSummaries := make([]string, len(nodes))
 	for idx, node := range nodes {
 		rpcNodes[idx] = llama.RpcNode{
 			Ip:   node.Ip(),
 			Port: node.Port(),
 		}
+		rpcNodeSummaries[idx] = formatNodeSummary(node)
 	}
+	log.Printf("Instance rpc nodes for model %s: %s", model, strings.Join(rpcNodeSummaries, ", "))
 
 	// find the lowest port that is not used
 	port := i.lowestPort
@@ -72,6 +76,7 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 	}
 
 	// start the llama server
+	startupLog := &startupLogBuffer{}
 	cmd, err := func() (*exec.Cmd, error) {
 		// guard critical section
 		i.Lock()
@@ -84,9 +89,9 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 			Port:          port,
 			OffloadLayers: &offloadLayers,
 		})
-		cmd.Stdout = newProcessLogWriter(model, "stdout", nil)
+		cmd.Stdout = newProcessLogWriter(model, "stdout", nil, startupLog.Add)
 		// i is already locked here — read callbacks directly, no re-lock
-		cmd.Stderr = newProcessLogWriter(model, "stderr", makePhaseDetector(model, i.phaseCallback, i.layersCallback))
+		cmd.Stderr = newProcessLogWriter(model, "stderr", makePhaseDetector(model, i.phaseCallback, i.layersCallback), startupLog.Add)
 
 		err := cmd.Start()
 		if err != nil {
@@ -119,11 +124,21 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 
 	// return the new instance
 	return &instanceImpl{
-		process: cmd.Process,
-		port:    port,
-		dead:    dead,
-		model:   model,
+		process:    cmd.Process,
+		port:       port,
+		dead:       dead,
+		model:      model,
+		startupLog: startupLog,
+		rpcNodes:   rpcNodeSummaries,
 	}, nil
+}
+
+func formatNodeSummary(node Node) string {
+	model := node.HardwareModel()
+	if model == "" {
+		model = "unknown-model"
+	}
+	return fmt.Sprintf("%s (%s @ %s:%d, max=%d)", node.Id(), model, node.Ip(), node.Port(), node.MaxSize())
 }
 
 func chooseOffloadLayers(nodes []Node) int {
@@ -157,10 +172,11 @@ type processLogWriter struct {
 	stream string
 	buffer bytes.Buffer
 	onLine func(string) // called with each complete trimmed line
+	onLog  func(stream string, line string)
 }
 
-func newProcessLogWriter(model string, stream string, onLine func(string)) *processLogWriter {
-	return &processLogWriter{model: model, stream: stream, onLine: onLine}
+func newProcessLogWriter(model string, stream string, onLine func(string), onLog func(stream string, line string)) *processLogWriter {
+	return &processLogWriter{model: model, stream: stream, onLine: onLine, onLog: onLog}
 }
 
 // reProgressPct matches llama.cpp download progress lines, e.g. "45.2% (123456 / 272060416 bytes)"
@@ -188,6 +204,9 @@ func (w *processLogWriter) Write(p []byte) (int, error) {
 			remaining := strings.TrimSpace(w.buffer.String())
 			if remaining != "" {
 				log.Printf("[llama %s %s] %s", w.model, w.stream, remaining)
+				if w.onLog != nil {
+					w.onLog(w.stream, remaining)
+				}
 				if w.onLine != nil {
 					w.onLine(remaining)
 				}
@@ -198,6 +217,9 @@ func (w *processLogWriter) Write(p []byte) (int, error) {
 		line = strings.TrimRight(line, "\n\r")
 		if line != "" {
 			log.Printf("[llama %s %s] %s", w.model, w.stream, line)
+			if w.onLog != nil {
+				w.onLog(w.stream, line)
+			}
 			if w.onLine != nil {
 				w.onLine(line)
 			}

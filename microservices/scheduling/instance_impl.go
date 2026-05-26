@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/openai/openai-go/v2"
@@ -14,10 +16,63 @@ import (
 )
 
 type instanceImpl struct {
-	process *os.Process
-	dead    chan struct{}
-	port    int
-	model   string
+	process    *os.Process
+	dead       chan struct{}
+	port       int
+	model      string
+	startupLog *startupLogBuffer
+	rpcNodes   []string
+}
+
+type startupLogBuffer struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (b *startupLogBuffer) Add(stream string, line string) {
+	if b == nil {
+		return
+	}
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.lines = append(b.lines, fmt.Sprintf("%s: %s", stream, trimmed))
+	if len(b.lines) > 16 {
+		b.lines = b.lines[len(b.lines)-16:]
+	}
+}
+
+func (b *startupLogBuffer) FailureSummary() string {
+	if b == nil {
+		return ""
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.lines) == 0 {
+		return ""
+	}
+
+	var important []string
+	for _, line := range b.lines {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "error") ||
+			strings.Contains(lower, "failed") ||
+			strings.Contains(lower, "mismatch") ||
+			strings.Contains(lower, "warning") ||
+			strings.Contains(lower, "exiting") {
+			important = append(important, line)
+		}
+	}
+	if len(important) == 0 {
+		important = b.lines
+	}
+	if len(important) > 4 {
+		important = important[len(important)-4:]
+	}
+	return strings.Join(important, " | ")
 }
 
 // Model implements [Instance].
@@ -40,7 +95,10 @@ func (i *instanceImpl) WaitReady() error {
 		select {
 		case _, ok := <-i.dead:
 			if !ok {
-				return fmt.Errorf("instance is dead")
+				if summary := i.startupLog.FailureSummary(); summary != "" {
+					return fmt.Errorf("instance died during startup on rpc nodes [%s]: %s", strings.Join(i.rpcNodes, ", "), summary)
+				}
+				return fmt.Errorf("instance is dead on rpc nodes [%s]", strings.Join(i.rpcNodes, ", "))
 			}
 		default:
 		}

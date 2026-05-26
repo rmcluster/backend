@@ -36,14 +36,16 @@ func (t *testInstance) Kill()             {}
 func (t *testInstance) AwaitTermination() {}
 
 type testNode struct {
-	id      string
-	maxSize int64
+	id            string
+	hardwareModel string
+	maxSize       int64
 }
 
-func (t *testNode) Id() string     { return t.id }
-func (t *testNode) Ip() string     { return "" }
-func (t *testNode) Port() int      { return 0 }
-func (t *testNode) MaxSize() int64 { return t.maxSize }
+func (t *testNode) Id() string            { return t.id }
+func (t *testNode) HardwareModel() string { return t.hardwareModel }
+func (t *testNode) Ip() string            { return "" }
+func (t *testNode) Port() int             { return 0 }
+func (t *testNode) MaxSize() int64        { return t.maxSize }
 
 type testFactory struct {
 	mu         sync.Mutex
@@ -147,7 +149,7 @@ func TestPartitioningSchedulerSnapshotAllocations(t *testing.T) {
 	}
 }
 
-func TestPartitioningSchedulerWaitsForFullTargetBeforeStarting(t *testing.T) {
+func TestPartitioningSchedulerUsesAvailableNodesUpToTarget(t *testing.T) {
 	factory := &testFactory{}
 	scheduler := NewPartitioningScheduler(factory, 2)
 	task := &testTask{model: "demo", started: make(chan struct{})}
@@ -155,23 +157,17 @@ func TestPartitioningSchedulerWaitsForFullTargetBeforeStarting(t *testing.T) {
 	scheduler.OnNodeConnect(&testNode{id: "node-1"})
 	scheduler.OnNewTask(task)
 
-	time.Sleep(100 * time.Millisecond)
-	if got := factory.StartCounts(); len(got) != 0 {
-		t.Fatalf("StartInstance called before full target was available: %v", got)
-	}
-
-	scheduler.OnNodeConnect(&testNode{id: "node-2"})
 	waitUntil(t, time.Second, func() bool {
 		return len(factory.StartCounts()) == 1
 	})
 
 	<-task.started
 	got := factory.StartCounts()
-	if got[0] != 2 {
-		t.Fatalf("StartInstance used %d nodes, want 2", got[0])
+	if got[0] != 1 {
+		t.Fatalf("StartInstance used %d nodes, want 1 available node", got[0])
 	}
-	if len(task.allocated) != 2 {
-		t.Fatalf("allocated nodes = %v, want 2 nodes", task.allocated)
+	if len(task.allocated) != 1 || task.allocated[0] != "node-1" {
+		t.Fatalf("allocated nodes = %v, want [node-1]", task.allocated)
 	}
 }
 

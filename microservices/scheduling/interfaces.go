@@ -22,6 +22,7 @@ type InstanceFactory interface {
 
 type Node interface {
 	Id() string
+	HardwareModel() string
 	Ip() string
 	Port() int
 	MaxSize() int64

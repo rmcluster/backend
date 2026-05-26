@@ -1,9 +1,11 @@
 package scheduling
 
 import (
+	"fmt"
 	"log"
 	"math"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -253,7 +255,7 @@ taskHandlerLoop:
 			}
 		}
 
-		for len(s.unallocatedNodes) < target {
+		for len(s.unallocatedNodes) == 0 {
 			select {
 			case nodeEvent := <-s.nodeEventChan:
 				s.handleNodeEvent(nodeEvent)
@@ -305,7 +307,14 @@ taskHandlerLoop:
 			nodes = nodes[:target]
 		}
 
-		log.Printf("PartitioningScheduler: starting model %s with %d nodes", task.Model(), len(nodes))
+		log.Printf(
+			"PartitioningScheduler: starting model %s with %d nodes (target %d, available %d): %s",
+			task.Model(),
+			len(nodes),
+			target,
+			len(s.unallocatedNodes),
+			describeNodes(nodes),
+		)
 
 		instance, err := s.instanceFactory.StartInstance(task.Model(), nodes)
 		if err != nil {
@@ -349,6 +358,21 @@ taskHandlerLoop:
 			task.PerformInference(instanceInfo.instance)
 		}()
 	}
+}
+
+func describeNodes(nodes []Node) string {
+	if len(nodes) == 0 {
+		return "(none)"
+	}
+	parts := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		model := node.HardwareModel()
+		if model == "" {
+			model = "unknown-model"
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s@%s:%d", node.Id(), model, node.Ip(), node.Port()))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (s *PartitioningScheduler) processEvents() {

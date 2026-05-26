@@ -629,7 +629,7 @@ def main() -> int:
     run_slug = timestamp_slug(started_at)
     run_dir = resolve_output_root(args.out_dir) / run_slug
     run_dir.mkdir(parents=True, exist_ok=False)
-    mplconfigdir = Path(tempfile.mkdtemp(prefix="storage-bench-mpl-", dir="/private/tmp"))
+    mplconfigdir = Path(tempfile.mkdtemp(prefix="storage-bench-mpl-"))
     os.environ["MPLCONFIGDIR"] = str(mplconfigdir)
     import matplotlib
 

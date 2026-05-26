@@ -29,7 +29,9 @@ func setDefaults(args *args) {
 	}
 
 	if args.Ramalama == nil {
-		if env := os.Getenv("LLAMA_COMMAND"); env != "" {
+		if env := strings.TrimSpace(os.Getenv("LLAMA_SERVER_PATH")); env != "" {
+			args.Ramalama = []string{env}
+		} else if env := os.Getenv("LLAMA_COMMAND"); env != "" {
 			args.Ramalama = strings.Split(env, " ")
 			if len(args.Ramalama) == 0 {
 				log.Fatalln("LLAMA_COMMAND environment variable should not be all whitespace")

@@ -7,10 +7,11 @@ import (
 )
 
 type node struct {
-	id      string
-	ip      string
-	port    int
-	maxSize atomic.Int64
+	id            string
+	hardwareModel string
+	ip            string
+	port          int
+	maxSize       atomic.Int64
 }
 
 // Id implements [scheduling.Node].
@@ -21,6 +22,11 @@ func (n *node) Id() string {
 // Ip implements [scheduling.Node].
 func (n *node) Ip() string {
 	return n.ip
+}
+
+// HardwareModel implements [scheduling.Node].
+func (n *node) HardwareModel() string {
+	return n.hardwareModel
 }
 
 // Port implements [scheduling.Node].
