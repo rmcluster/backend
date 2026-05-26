@@ -28,6 +28,11 @@ type instanceInfo struct {
 	usedNodes []Node
 }
 
+type reservedInstance struct {
+	instanceInfo
+	reservedAt time.Time
+}
+
 type TaskCompletionMessage struct {
 	instanceInfo
 	task Task
@@ -51,6 +56,8 @@ func NewPartitioningScheduler(instanceFactory InstanceFactory, parallelismTarget
 		taskCompletedChan:  make(chan TaskCompletionMessage, 16),
 		instanceDeadChan:   make(chan instanceInfo, 16),
 		idleBias:           10 * time.Second,
+		reservedInstances:  make(map[string]reservedInstance),
+		reservationTTL:     15 * time.Second,
 		allocationSnapshot: make(map[string][]string),
 	}
 	scheduler.parallelismTarget.Store(int32(max(parallelismTarget, 1)))
@@ -76,8 +83,10 @@ type PartitioningScheduler struct {
 	unallocatedNodes  map[string]Node
 	allocatedNodes    map[string]NodeAllocationInfo
 	idleInstances     map[string][]instanceInfo
+	reservedInstances map[string]reservedInstance
 	parallelismTarget atomic.Int32  // target for how many nodes to allocate per instance
 	idleBias          time.Duration // how many seconds of "advantage" tasks for an idle instance gets
+	reservationTTL    time.Duration
 
 	allocationSnapshotMu sync.RWMutex
 	allocationSnapshot   map[string][]string
@@ -197,38 +206,7 @@ taskHandlerLoop:
 
 		s.processEvents()
 
-		// attempt to assign the task
-		for len(s.idleInstances[task.Model()]) > 0 { // assign to the idle instanceInfo
-			instanceInfo := s.idleInstances[task.Model()][0]
-			s.idleInstances[task.Model()] = s.idleInstances[task.Model()][1:]
-			target := s.GetParallelismTarget()
-
-			if !s.checkInstanceNodesStillOk(instanceInfo) {
-				s.killInstance(instanceInfo)
-				continue
-			}
-			if !s.instanceMatchesTarget(instanceInfo, target) {
-				log.Printf(
-					"PartitioningScheduler: discarding idle instance for model %s with %d nodes; target is %d",
-					task.Model(),
-					len(instanceInfo.usedNodes),
-					target,
-				)
-				s.killInstance(instanceInfo)
-				continue
-			}
-			s.attachAllocatedNodes(task, instanceInfo.usedNodes)
-
-			go func() {
-				defer func() {
-					s.taskCompletedChan <- TaskCompletionMessage{
-						task:         task,
-						instanceInfo: instanceInfo,
-					}
-				}()
-				task.PerformInference(instanceInfo.instance)
-			}()
-
+		if s.tryAssignExistingInstance(task) {
 			continue taskHandlerLoop
 		}
 
@@ -255,32 +233,22 @@ taskHandlerLoop:
 			}
 		}
 
-		for len(s.unallocatedNodes) == 0 {
+		for {
+			if s.tryAssignExistingInstance(task) {
+				continue taskHandlerLoop
+			}
+			if len(s.unallocatedNodes) > 0 {
+				break
+			}
 			select {
 			case nodeEvent := <-s.nodeEventChan:
 				s.handleNodeEvent(nodeEvent)
 			case task := <-s.taskCancelledChan:
 				s.handleTaskCancellation(task)
 			case completion := <-s.taskCompletedChan:
-				if completion.instanceInfo.instance.Model() == task.Model() &&
-					s.checkInstanceNodesStillOk(completion.instanceInfo) &&
-					s.instanceMatchesTarget(completion.instanceInfo, target) {
-					// reuse the instance
-					instanceInfo := completion.instanceInfo
-					s.attachAllocatedNodes(task, instanceInfo.usedNodes)
-					go func() {
-						defer func() {
-							s.taskCompletedChan <- TaskCompletionMessage{
-								task:         task,
-								instanceInfo: instanceInfo,
-							}
-						}()
-						task.PerformInference(instanceInfo.instance)
-					}()
-					continue taskHandlerLoop
-				} else {
-					s.killInstance(completion.instanceInfo)
-				}
+				s.handleTaskCompletion(completion)
+			case instanceInfo := <-s.instanceDeadChan:
+				s.killInstance(instanceInfo)
 			}
 		}
 
@@ -376,6 +344,7 @@ func describeNodes(nodes []Node) string {
 }
 
 func (s *PartitioningScheduler) processEvents() {
+	s.releaseExpiredReservations()
 	for {
 		select {
 		case taskCompletionMessage := <-s.taskCompletedChan:
@@ -412,11 +381,18 @@ func (s *PartitioningScheduler) handleNodeDisconnect(node Node) {
 }
 
 func (s *PartitioningScheduler) handleTaskCompletion(taskCompletionMessage TaskCompletionMessage) {
-	if s.checkInstanceNodesStillOk(taskCompletionMessage.instanceInfo) {
-		s.idleInstances[taskCompletionMessage.task.Model()] = append(s.idleInstances[taskCompletionMessage.task.Model()], taskCompletionMessage.instanceInfo)
+	if !s.checkInstanceNodesStillOk(taskCompletionMessage.instanceInfo) {
+		s.killInstance(taskCompletionMessage.instanceInfo)
 		return
 	}
-	s.killInstance(taskCompletionMessage.instanceInfo)
+	if key := s.benchmarkReservationKey(taskCompletionMessage.task); key != "" && s.benchmarkStage(taskCompletionMessage.task) == "warmup" {
+		s.reservedInstances[key] = reservedInstance{
+			instanceInfo: taskCompletionMessage.instanceInfo,
+			reservedAt:   time.Now(),
+		}
+		return
+	}
+	s.idleInstances[taskCompletionMessage.task.Model()] = append(s.idleInstances[taskCompletionMessage.task.Model()], taskCompletionMessage.instanceInfo)
 }
 
 func (s *PartitioningScheduler) handleTaskCancellation(task Task) {
@@ -459,6 +435,115 @@ func (s *PartitioningScheduler) attachAllocatedNodes(task Task, nodes []Node) {
 		return
 	}
 	awareTask.SetAllocatedNodes(slices.Clone(nodes))
+}
+
+func (s *PartitioningScheduler) benchmarkReservationKey(task Task) string {
+	awareTask, ok := task.(BenchmarkGroupAwareTask)
+	if !ok || awareTask.BenchmarkGroupID() == "" {
+		return ""
+	}
+	return task.Model() + "\x00" + awareTask.BenchmarkGroupID()
+}
+
+func (s *PartitioningScheduler) benchmarkStage(task Task) string {
+	awareTask, ok := task.(BenchmarkGroupAwareTask)
+	if !ok {
+		return ""
+	}
+	return awareTask.BenchmarkStage()
+}
+
+func (s *PartitioningScheduler) takeReservedInstance(task Task, target int) (instanceInfo, bool) {
+	key := s.benchmarkReservationKey(task)
+	if key == "" {
+		return instanceInfo{}, false
+	}
+	reserved, ok := s.reservedInstances[key]
+	if !ok {
+		return instanceInfo{}, false
+	}
+	delete(s.reservedInstances, key)
+	if time.Since(reserved.reservedAt) > s.reservationTTL {
+		s.addIdleOrKill(reserved.instanceInfo, task.Model())
+		return instanceInfo{}, false
+	}
+	if !s.checkInstanceNodesStillOk(reserved.instanceInfo) {
+		s.killInstance(reserved.instanceInfo)
+		return instanceInfo{}, false
+	}
+	if !s.instanceMatchesTarget(reserved.instanceInfo, target) {
+		s.addIdleOrKill(reserved.instanceInfo, task.Model())
+		return instanceInfo{}, false
+	}
+	return reserved.instanceInfo, true
+}
+
+func (s *PartitioningScheduler) takeIdleInstance(task Task, target int) (instanceInfo, bool) {
+	for len(s.idleInstances[task.Model()]) > 0 {
+		instanceInfo := s.idleInstances[task.Model()][0]
+		s.idleInstances[task.Model()] = s.idleInstances[task.Model()][1:]
+		if !s.checkInstanceNodesStillOk(instanceInfo) {
+			s.killInstance(instanceInfo)
+			continue
+		}
+		if !s.instanceMatchesTarget(instanceInfo, target) {
+			log.Printf(
+				"PartitioningScheduler: discarding idle instance for model %s with %d nodes; target is %d",
+				task.Model(),
+				len(instanceInfo.usedNodes),
+				target,
+			)
+			s.killInstance(instanceInfo)
+			continue
+		}
+		return instanceInfo, true
+	}
+	return instanceInfo{}, false
+}
+
+func (s *PartitioningScheduler) tryAssignExistingInstance(task Task) bool {
+	target := s.GetParallelismTarget()
+	if instanceInfo, ok := s.takeReservedInstance(task, target); ok {
+		s.startTaskOnInstance(task, instanceInfo)
+		return true
+	}
+	if instanceInfo, ok := s.takeIdleInstance(task, target); ok {
+		s.startTaskOnInstance(task, instanceInfo)
+		return true
+	}
+	return false
+}
+
+func (s *PartitioningScheduler) startTaskOnInstance(task Task, instanceInfo instanceInfo) {
+	s.attachAllocatedNodes(task, instanceInfo.usedNodes)
+	go func() {
+		defer func() {
+			s.taskCompletedChan <- TaskCompletionMessage{
+				task:         task,
+				instanceInfo: instanceInfo,
+			}
+		}()
+		task.PerformInference(instanceInfo.instance)
+	}()
+}
+
+func (s *PartitioningScheduler) addIdleOrKill(instanceInfo instanceInfo, model string) {
+	if s.checkInstanceNodesStillOk(instanceInfo) {
+		s.idleInstances[model] = append(s.idleInstances[model], instanceInfo)
+		return
+	}
+	s.killInstance(instanceInfo)
+}
+
+func (s *PartitioningScheduler) releaseExpiredReservations() {
+	now := time.Now()
+	for key, reserved := range s.reservedInstances {
+		if now.Sub(reserved.reservedAt) <= s.reservationTTL {
+			continue
+		}
+		delete(s.reservedInstances, key)
+		s.addIdleOrKill(reserved.instanceInfo, reserved.instanceInfo.instance.Model())
+	}
 }
 
 // scoreTask returns a score for a task. Higher scores are prioritized.

@@ -51,6 +51,33 @@ class RunBenchmarksHelpersTest(unittest.TestCase):
         self.assertEqual(enriched["tps"], 7.5)
         self.assertEqual(enriched["tokens_streamed"], 11)
 
+    def test_request_allocated_devices_reads_metric_ids(self) -> None:
+        devices = rb.request_allocated_devices({"server_metric": {"allocated_node_ids": ["a", "b"]}})
+        self.assertEqual(devices, ("a", "b"))
+
+    def test_find_request_metric_finds_matching_request(self) -> None:
+        metric = rb.find_request_metric({"requests": [{"client_request_id": "req-1", "tokens_streamed": 3}]}, "req-1")
+        self.assertEqual(metric, {"client_request_id": "req-1", "tokens_streamed": 3})
+
+    def test_matches_rerun_point(self) -> None:
+        rerun_points = [{"model_label": "Qwen3-0.6B", "scenario": "android_only", "target": 2}]
+        self.assertTrue(rb.matches_rerun_point("Qwen3-0.6B", "android_only", 2, rerun_points))
+        self.assertFalse(rb.matches_rerun_point("Qwen3-0.6B", "android_only", 1, rerun_points))
+
+    def test_select_model_sweep_plan_filters_to_requested_points(self) -> None:
+        original = rb.connected_node_count
+        rb.connected_node_count = lambda _: 3
+        config = {"models": [{"label": "Qwen3-0.6B", "id": "a"}, {"label": "1.0B Llama 3.2", "id": "b"}], "targets": "auto", "scenarios": ["android_only"]}
+        try:
+            plan = rb.select_model_sweep_plan(
+                "http://unused",
+                config,
+                [{"model_label": "1.0B Llama 3.2", "scenario": "android_only", "target": 2}],
+            )
+        finally:
+            rb.connected_node_count = original
+        self.assertEqual(plan, [("android_only", {"label": "1.0B Llama 3.2", "id": "b"}, 2)])
+
     def test_annotate_failure_marks_capacity_issue(self) -> None:
         text = rb.annotate_failure("HTTP Error 503: Service Unavailable: instance died during startup on rpc nodes [...]")
         self.assertIn("assumed insufficient RAM/capacity", text)

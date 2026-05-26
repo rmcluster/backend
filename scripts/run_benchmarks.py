@@ -62,6 +62,16 @@ MODEL_SWEEP_CONFIG = {
     "temperature": 0.7,
     "max_completion_tokens": 64,
 }
+# Re-run points that are either still failing or were collected before the
+# sticky warmup/measured-instance fix, so their comparisons are not trustworthy.
+RERUN_POINTS = [
+    {"model_label": "Qwen3-0.6B", "scenario": "android_only", "target": 1},
+    {"model_label": "Qwen3-0.6B", "scenario": "android_only", "target": 2},
+    {"model_label": "Qwen3-0.6B", "scenario": "android_only", "target": 3},
+    {"model_label": "1.0B Llama 3.2", "scenario": "android_only", "target": 1},
+    {"model_label": "1.0B Llama 3.2", "scenario": "android_only", "target": 2},
+    {"model_label": "1.0B Llama 3.2", "scenario": "android_only", "target": 3},
+]
 
 
 def repo_root() -> Path: return Path(__file__).resolve().parents[1]
@@ -165,6 +175,27 @@ def resolve_sweep_targets(base_url: str, targets: Any) -> list[int]:
     return list(range(1, connected_node_count(base_url) + 1)) if targets == "auto" else [int(target) for target in targets]
 
 
+def matches_rerun_point(model_label: str, scenario: str, target: int, rerun_points: list[dict[str, Any]]) -> bool:
+    return any(
+        str(point.get("model_label")) == model_label and
+        str(point.get("scenario")) == scenario and
+        int(point.get("target")) == target
+        for point in rerun_points
+    )
+
+
+def select_model_sweep_plan(base_url: str, config: dict[str, Any], rerun_points: list[dict[str, Any]]) -> list[tuple[str, dict[str, Any], int]]:
+    plan: list[tuple[str, dict[str, Any], int]] = []
+    targets = resolve_sweep_targets(base_url, config["targets"])
+    for scenario in config["scenarios"]:
+        for model in config["models"]:
+            for target in targets:
+                if rerun_points and not matches_rerun_point(model["label"], str(scenario), int(target), rerun_points):
+                    continue
+                plan.append((str(scenario), model, int(target)))
+    return plan
+
+
 def wait_for_loading(base_url: str, model: str | None = None, timeout_s: int = MODEL_LOAD_TIMEOUT_S) -> dict[str, Any]:
     deadline, status = time.time() + timeout_s, {}
     while time.time() < deadline:
@@ -189,12 +220,17 @@ def iter_sse_events(response) -> str:
                 yield payload
 
 
-def run_streaming_chat_request(base_url: str, model: str, prompt: str, temperature: float, max_completion_tokens: int, preset_name: str) -> dict[str, Any]:
+def run_streaming_chat_request(base_url: str, model: str, prompt: str, temperature: float, max_completion_tokens: int, preset_name: str, benchmark_group_id: str = "", benchmark_stage: str = "") -> dict[str, Any]:
     request_id, started = str(uuid.uuid4()), time.time()
+    headers = {"Accept": "text/event-stream", "Content-Type": "application/json", "X-Benchmark-Request-Id": request_id}
+    if benchmark_group_id:
+        headers["X-Benchmark-Group-Id"] = benchmark_group_id
+    if benchmark_stage:
+        headers["X-Benchmark-Stage"] = benchmark_stage
     req = urllib.request.Request(
         f"{base_url.rstrip('/')}/v1/chat/completions",
         data=json.dumps({"model": model, "stream": True, "temperature": temperature, "max_tokens": max_completion_tokens, "messages": [{"role": "user", "content": prompt}]}).encode("utf-8"),
-        headers={"Accept": "text/event-stream", "Content-Type": "application/json", "X-Benchmark-Request-Id": request_id},
+        headers=headers,
         method="POST",
     )
     first_token_at, completion_chars, reasoning_chars = None, 0, 0
@@ -253,7 +289,19 @@ def enrich_result(result: dict[str, Any], metric: dict[str, Any] | None) -> dict
     return result | {"tokens_streamed": tokens, "generation_time_s": generation_time_s, "tpot_s": tpot_s, "tps": metric.get("tokens_per_second"), "server_metric": metric}
 
 
-def run_parallel_chat_workload(base_url: str, model: str, prompt: str, queries: int, concurrency: int, temperature: float, max_completion_tokens: int, preset_name: str) -> dict[str, Any]:
+def find_request_metric(snapshot: dict[str, Any], request_id: str) -> dict[str, Any] | None:
+    for item in snapshot.get("requests") or []:
+        if item.get("client_request_id") == request_id:
+            return item
+    return None
+
+
+def request_allocated_devices(result: dict[str, Any]) -> tuple[str, ...]:
+    metric = result.get("server_metric") or {}
+    return tuple(metric.get("allocated_node_ids") or ())
+
+
+def run_parallel_chat_workload(base_url: str, model: str, prompt: str, queries: int, concurrency: int, temperature: float, max_completion_tokens: int, preset_name: str, benchmark_group_id: str = "", benchmark_stage: str = "") -> dict[str, Any]:
     results, errors, lock, next_index = [], [], threading.Lock(), 0
 
     def worker() -> None:
@@ -264,7 +312,7 @@ def run_parallel_chat_workload(base_url: str, model: str, prompt: str, queries: 
                     return
                 next_index += 1
             try:
-                result = run_streaming_chat_request(base_url, model, prompt, temperature, max_completion_tokens, preset_name)
+                result = run_streaming_chat_request(base_url, model, prompt, temperature, max_completion_tokens, preset_name, benchmark_group_id, benchmark_stage)
             except Exception as exc:
                 with lock:
                     errors.append(str(exc))
@@ -283,24 +331,38 @@ def run_parallel_chat_workload(base_url: str, model: str, prompt: str, queries: 
     return {"summary": {"queries": queries, "concurrency": concurrency, "wall_time_s": time.time() - started, "avg_ttft_s": sum(ttfts) / len(ttfts) if ttfts else None, "avg_tps": sum(tps_values) / len(tps_values) if tps_values else None, "error_count": len(errors)}, "results": enriched, "errors": errors, "server_metrics_before": before, "server_metrics_after": after}
 
 
-def warm_up_model(base_url: str, model: str) -> None:
-    run_streaming_chat_request(base_url, model, WARMUP_PROMPT, 0.0, WARMUP_MAX_TOKENS, "warmup")
+def warm_up_model(base_url: str, model: str, benchmark_group_id: str) -> dict[str, Any]:
+    result = run_streaming_chat_request(base_url, model, WARMUP_PROMPT, 0.0, WARMUP_MAX_TOKENS, "warmup", benchmark_group_id, "warmup")
+    metric = find_request_metric(get_metrics_snapshot(base_url), result["request_id"])
+    return enrich_result(result, metric)
 
 
 def run_chat_workload_with_retries(base_url: str, model: str, prompt: str, queries: int, concurrency: int, temperature: float, max_completion_tokens: int, preset_name: str) -> tuple[dict[str, Any], dict[str, Any]]:
     loading = wait_for_loading(base_url, model)
     last_error = ""
     for attempt in range(REQUEST_RETRY_LIMIT + 1):
+        benchmark_group_id = str(uuid.uuid4())
         try:
-            warm_up_model(base_url, model)
-            loading = wait_for_loading(base_url, model)
-            workload = run_parallel_chat_workload(base_url, model, prompt, queries, concurrency, temperature, max_completion_tokens, preset_name)
+            warmup = warm_up_model(base_url, model, benchmark_group_id)
+            workload = run_parallel_chat_workload(base_url, model, prompt, queries, concurrency, temperature, max_completion_tokens, preset_name, benchmark_group_id, "measured")
         except Exception as exc:
             last_error = annotate_failure(str(exc))
             if attempt >= REQUEST_RETRY_LIMIT or "503" not in last_error or is_capacity_failure(last_error):
                 return {"summary": {"queries": queries, "concurrency": concurrency, "wall_time_s": 0.0, "avg_ttft_s": None, "avg_tps": None, "error_count": 1}, "results": [], "errors": [last_error], "server_metrics_before": {}, "server_metrics_after": {}}, loading
             loading = wait_for_loading(base_url, model)
             continue
+        if len(workload["results"]) == 1:
+            warmup_devices = request_allocated_devices(warmup)
+            measured_devices = request_allocated_devices(workload["results"][0])
+            if warmup_devices and measured_devices and warmup_devices != measured_devices:
+                last_error = (
+                    "warmup and measured request used different device sets: "
+                    f"{','.join(warmup_devices)} vs {','.join(measured_devices)}"
+                )
+                if attempt >= REQUEST_RETRY_LIMIT:
+                    return {"summary": {"queries": queries, "concurrency": concurrency, "wall_time_s": 0.0, "avg_ttft_s": None, "avg_tps": None, "error_count": 1}, "results": [], "errors": [last_error], "server_metrics_before": workload.get("server_metrics_before", {}), "server_metrics_after": workload.get("server_metrics_after", {})}, loading
+                loading = wait_for_loading(base_url, model)
+                continue
         if not workload_only_has_503s(workload):
             return workload, loading
         last_error = annotate_failure("; ".join(workload["errors"]))
@@ -388,26 +450,31 @@ def write_run_metadata(run_dir: Path, started_at: datetime, finished_at: datetim
 def run_model_sweep_section(base_url: str, run_dir: Path, config: dict[str, Any], presets: dict[str, Any]) -> dict[str, Any]:
     preset_name, prompt, temperature, max_tokens = resolve_prompt(config, presets)
     out_dir, rows, details = run_dir / "model-sweep", [], []
-    targets = resolve_sweep_targets(base_url, config["targets"])
-    for scenario in config["scenarios"]:
-        scenario_info = validate_scenario(base_url, str(scenario))
-        for model in config["models"]:
+    plan = select_model_sweep_plan(base_url, config, RERUN_POINTS)
+    scenario_info_cache: dict[str, dict[str, Any]] = {}
+    current_heading: tuple[str, str] | None = None
+    for scenario, model, target in plan:
+        if scenario not in scenario_info_cache:
+            scenario_info_cache[scenario] = validate_scenario(base_url, scenario)
+        scenario_info = scenario_info_cache[scenario]
+        heading = (scenario, model["label"])
+        if heading != current_heading:
             print(f"== {scenario} :: {model['label']} ==", flush=True)
-            for target in targets:
-                print(f"  target={target}", flush=True)
-                try:
-                    set_parallelism_target(base_url, int(target))
-                    time.sleep(1.0)
-                    workload, loading = run_chat_workload_with_retries(base_url, model["id"], prompt, int(config["queries"]), int(config["concurrency"]), float(temperature), int(max_tokens), preset_name)
-                    error = "; ".join(workload["errors"]) if workload["errors"] or not workload["results"] else ""
-                    rows.append(sweep_row(model["label"], model["id"], int(target), str(scenario), workload if not error else None, error, loading or get_loading_status(base_url)))
-                    details.append({"series_label": model["label"], "model": model["id"], "parallelism_target": target, "scenario": scenario, "scenario_info": scenario_info, "status": rows[-1]["status"], "error": error, "loading_status_after": loading, "workload": workload})
-                except Exception as exc:
-                    loading = get_loading_status(base_url)
-                    rows.append(sweep_row(model["label"], model["id"], int(target), str(scenario), None, repr(exc), loading))
-                    details.append({"series_label": model["label"], "model": model["id"], "parallelism_target": target, "scenario": scenario, "scenario_info": scenario_info, "status": "error", "error": repr(exc), "loading_status_after": loading})
-                write_model_sweep_artifacts(out_dir, rows, details)
-                print(f"    -> {rows[-1]['status']}", flush=True)
+            current_heading = heading
+        print(f"  target={target}", flush=True)
+        try:
+            set_parallelism_target(base_url, target)
+            time.sleep(1.0)
+            workload, loading = run_chat_workload_with_retries(base_url, model["id"], prompt, int(config["queries"]), int(config["concurrency"]), float(temperature), int(max_tokens), preset_name)
+            error = "; ".join(workload["errors"]) if workload["errors"] or not workload["results"] else ""
+            rows.append(sweep_row(model["label"], model["id"], target, scenario, workload if not error else None, error, loading or get_loading_status(base_url)))
+            details.append({"series_label": model["label"], "model": model["id"], "parallelism_target": target, "scenario": scenario, "scenario_info": scenario_info, "status": rows[-1]["status"], "error": error, "loading_status_after": loading, "workload": workload})
+        except Exception as exc:
+            loading = get_loading_status(base_url)
+            rows.append(sweep_row(model["label"], model["id"], target, scenario, None, repr(exc), loading))
+            details.append({"series_label": model["label"], "model": model["id"], "parallelism_target": target, "scenario": scenario, "scenario_info": scenario_info, "status": "error", "error": repr(exc), "loading_status_after": loading})
+        write_model_sweep_artifacts(out_dir, rows, details)
+        print(f"    -> {rows[-1]['status']}", flush=True)
     return {"rows": rows, "points": len(rows)}
 
 

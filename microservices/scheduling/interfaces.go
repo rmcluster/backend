@@ -40,3 +40,11 @@ type AllocatedNodesAwareTask interface {
 	Task
 	SetAllocatedNodes([]Node)
 }
+
+// BenchmarkGroupAwareTask lets the scheduler keep paired benchmark requests on
+// the same warmed instance when possible.
+type BenchmarkGroupAwareTask interface {
+	Task
+	BenchmarkGroupID() string
+	BenchmarkStage() string
+}

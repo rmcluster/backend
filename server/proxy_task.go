@@ -42,6 +42,14 @@ func (p *proxyTask) Model() string {
 	return p.model
 }
 
+func (p *proxyTask) BenchmarkGroupID() string {
+	return p.r.Header.Get("X-Benchmark-Group-Id")
+}
+
+func (p *proxyTask) BenchmarkStage() string {
+	return p.r.Header.Get("X-Benchmark-Stage")
+}
+
 func (p *proxyTask) SetAllocatedNodes(nodes []scheduling.Node) {
 	nodeIDs := make([]string, 0, len(nodes))
 	for _, node := range nodes {
@@ -88,6 +96,7 @@ func (p *proxyTask) PerformInference(instance scheduling.Instance) (err error) {
 }
 
 var _ scheduling.Task = (*proxyTask)(nil)
+var _ scheduling.BenchmarkGroupAwareTask = (*proxyTask)(nil)
 
 func (p *proxyTask) recordMetrics(startedAt time.Time, writer *instrumentedFlushingWriter) {
 	if p.metricsCollector == nil {

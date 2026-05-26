@@ -32,8 +32,12 @@ func (t *testInstance) Stop() {
 		}
 	})
 }
-func (t *testInstance) Kill()             {}
-func (t *testInstance) AwaitTermination() {}
+func (t *testInstance) Kill() {}
+func (t *testInstance) AwaitTermination() {
+	if t.stopped != nil {
+		<-t.stopped
+	}
+}
 
 type testNode struct {
 	id            string
@@ -56,7 +60,7 @@ func (t *testFactory) StartInstance(model string, nodes []Node) (Instance, error
 	t.mu.Lock()
 	t.startCalls = append(t.startCalls, len(nodes))
 	t.mu.Unlock()
-	return &testInstance{model: model}, nil
+	return &testInstance{model: model, stopped: make(chan struct{})}, nil
 }
 
 func (t *testFactory) StartCounts() []int {
@@ -92,6 +96,15 @@ func (t *testTask) SetAllocatedNodes(nodes []Node) {
 		t.allocated = append(t.allocated, node.Id())
 	}
 }
+
+type benchmarkTestTask struct {
+	*testTask
+	groupID string
+	stage   string
+}
+
+func (t *benchmarkTestTask) BenchmarkGroupID() string { return t.groupID }
+func (t *benchmarkTestTask) BenchmarkStage() string   { return t.stage }
 
 func waitUntil(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Helper()
@@ -225,5 +238,42 @@ func TestPartitioningSchedulerPrefersLargestNodes(t *testing.T) {
 	}
 	if !got["large"] || !got["medium"] {
 		t.Fatalf("allocated nodes = %v, want large and medium nodes", task.allocated)
+	}
+}
+
+func TestPartitioningSchedulerKeepsWarmupAndMeasuredRequestOnSameInstance(t *testing.T) {
+	factory := &testFactory{}
+	scheduler := NewPartitioningScheduler(factory, 1)
+	scheduler.OnNodeConnect(&testNode{id: "node-1", maxSize: 100})
+
+	warmup := &benchmarkTestTask{
+		testTask: &testTask{model: "demo", started: make(chan struct{})},
+		groupID:  "bench-1",
+		stage:    "warmup",
+	}
+	scheduler.OnNewTask(warmup)
+	<-warmup.started
+
+	waitUntil(t, time.Second, func() bool {
+		_, ok := scheduler.reservedInstances["demo\x00bench-1"]
+		return ok
+	})
+
+	measured := &benchmarkTestTask{
+		testTask: &testTask{model: "demo", started: make(chan struct{})},
+		groupID:  "bench-1",
+		stage:    "measured",
+	}
+	scheduler.OnNewTask(measured)
+	<-measured.started
+
+	if got := factory.StartCounts(); len(got) != 1 {
+		t.Fatalf("StartInstance call count = %d, want 1", len(got))
+	}
+	if len(measured.allocated) != 1 || measured.allocated[0] != "node-1" {
+		t.Fatalf("measured task allocated nodes = %v, want [node-1]", measured.allocated)
+	}
+	if _, ok := scheduler.reservedInstances["demo\x00bench-1"]; ok {
+		t.Fatalf("reservation should be consumed after measured request")
 	}
 }
