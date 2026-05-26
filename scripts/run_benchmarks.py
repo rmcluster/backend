@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import os
@@ -16,19 +17,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-PRESETS_PATH = Path(__file__).with_name("prompt_presets.json")
 DEFAULT_PROMPT_PRESETS = {
-    "endless_creative_writing": {
-        "label": "Endless Creative Writing",
+    "creative_writing": {
+        "label": "Creative Writing",
         "prompt": "Write an open-ended creative fantasy story. Use flowery, wordy, descriptive language and expand on every detail.",
         "temperature": 0.7,
-        "max_completion_tokens": 2048,
+        "max_completion_tokens": 100,
     },
     "formatted_data": {
         "label": "Ranking People",
         "prompt": 'Create a JSON list for 20 fictional people in JSON format: {"name": <name>, "age": <age>, "height_cm": <height>, "gender": [<male or female>]}. After the json, output a markdown table ranking them by height.',
         "temperature": 0.7,
-        "max_completion_tokens": 2048,
+        "max_completion_tokens": 100,
     },
 }
 DEFAULT_MODELS = [
@@ -45,41 +45,37 @@ DEFAULT_MODELS = [
 BASE_URL = "http://127.0.0.1:4917"
 RESULTS_DIR = "benchmarks/results"
 RUN_LABEL = "benchmark-run"
-MODEL_LOAD_TIMEOUT_S = 90
+VALID_SCENARIOS = {"android_only", "ios_only", "heterogeneous"}
+MODEL_LOAD_TIMEOUT_S = 360
 MODEL_LOAD_POLL_S = 2
 REQUEST_RETRY_LIMIT = 1
-REQUEST_TIMEOUT_S = 300
+REQUEST_TIMEOUT_S = 360
+MAX_POINT_ATTEMPTS = 10
 WARMUP_PROMPT = "Say hi."
 WARMUP_MAX_TOKENS = 1
 MODEL_SWEEP_CONFIG = {
     "models": DEFAULT_MODELS,
     "targets": "auto",
-    "scenarios": ["android_only"],
     "queries": 1,
     "concurrency": 1,
-    "prompt_preset": "endless_creative_writing",
+    "prompt_preset": "creative_writing",
     "prompt": "",
     "temperature": 0.7,
     "max_completion_tokens": 64,
 }
-# Re-run points that are either still failing or were collected before the
-# sticky warmup/measured-instance fix, so their comparisons are not trustworthy.
-RERUN_POINTS = [
-    {"model_label": "Qwen3-0.6B", "scenario": "android_only", "target": 1},
-    {"model_label": "Qwen3-0.6B", "scenario": "android_only", "target": 2},
-    {"model_label": "Qwen3-0.6B", "scenario": "android_only", "target": 3},
-    {"model_label": "1.0B Llama 3.2", "scenario": "android_only", "target": 1},
-    {"model_label": "1.0B Llama 3.2", "scenario": "android_only", "target": 2},
-    {"model_label": "1.0B Llama 3.2", "scenario": "android_only", "target": 3},
-]
-
 
 def repo_root() -> Path: return Path(__file__).resolve().parents[1]
 def now_utc() -> datetime: return datetime.now(timezone.utc)
-def timestamp_slug(now: datetime) -> str: return now.strftime("%Y%m%d-%H%M%S")
 def resolve_output_root(path_str: str) -> Path:
     path = Path(path_str)
     return path if path.is_absolute() else repo_root() / path
+
+
+def read_json(path: Path, default: Any) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
 
 
 def write_json(path: Path, payload: Any) -> None:
@@ -97,7 +93,6 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writeheader()
         writer.writerows(rows)
 
-
 def write_model_sweep_artifacts(out_dir: Path, rows: list[dict[str, Any]], details: list[dict[str, Any]]) -> None:
     write_json(out_dir / "model_sweep.json", details)
     write_csv(out_dir / "model_sweep.csv", rows)
@@ -112,12 +107,87 @@ def write_model_sweep_artifacts(out_dir: Path, rows: list[dict[str, Any]], detai
     except ModuleNotFoundError:
         pass
 
+def point_key(series_label: str, scenario: str, target: int) -> tuple[str, str, int]:
+    return (series_label, scenario, int(target))
 
-def load_prompt_presets(path: Path = PRESETS_PATH) -> dict[str, Any]:
+
+def load_existing_model_sweep_rows(out_dir: Path) -> list[dict[str, Any]]:
+    csv_path = out_dir / "model_sweep.csv"
+    if not csv_path.exists():
+        return []
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        with csv_path.open("r", newline="", encoding="utf-8") as handle:
+            return list(csv.DictReader(handle))
     except Exception:
-        return DEFAULT_PROMPT_PRESETS.copy()
+        return []
+
+
+def merge_points(existing: list[dict[str, Any]], updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged = {
+        point_key(str(item.get("series_label") or ""), str(item.get("scenario") or ""), int(item.get("parallelism_target") or 0)): item
+        for item in existing
+    }
+    for item in updates:
+        merged[point_key(str(item.get("series_label") or ""), str(item.get("scenario") or ""), int(item.get("parallelism_target") or 0))] = item
+    return sorted(merged.values(), key=lambda item: (str(item.get("scenario") or ""), str(item.get("series_label") or ""), int(item.get("parallelism_target") or 0)))
+
+
+def point_status_index(points: list[dict[str, Any]]) -> dict[tuple[str, str, int], str]:
+    return {
+        point_key(str(item.get("series_label") or ""), str(item.get("scenario") or ""), int(item.get("parallelism_target") or 0)): str(item.get("status") or "")
+        for item in points
+    }
+
+
+def point_attempt_index(points: list[dict[str, Any]]) -> dict[tuple[str, str, int], int]:
+    return {
+        point_key(str(item.get("series_label") or ""), str(item.get("scenario") or ""), int(item.get("parallelism_target") or 0)): int(item.get("attempts") or 0)
+        for item in points
+    }
+
+
+def validate_scenario_name(scenario: str) -> str:
+    if scenario not in VALID_SCENARIOS:
+        raise RuntimeError(f"Unsupported scenario {scenario!r}; expected android_only, ios_only, or heterogeneous")
+    return scenario
+
+
+def scenario_run_dir(results_root: Path, scenario: str) -> Path:
+    return results_root / validate_scenario_name(scenario)
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run or resume benchmark sweeps for a single scenario.")
+    parser.add_argument("--scenario", choices=sorted(VALID_SCENARIOS), required=True, help="Scenario folder to run or resume.")
+    parser.add_argument("--base-url", default=BASE_URL, help="Benchmark server base URL.")
+    return parser
+
+
+def resolve_incomplete_model_sweep_plan(
+    base_url: str,
+    config: dict[str, Any],
+    existing_rows: list[dict[str, Any]],
+    existing_details: list[dict[str, Any]],
+) -> tuple[list[tuple[str, dict[str, Any], int]], dict[str, int]]:
+    plan = select_model_sweep_plan(base_url, config)
+    row_statuses = point_status_index(existing_rows)
+    detail_statuses = point_status_index(existing_details)
+    attempts = point_attempt_index(existing_details)
+    pending: list[tuple[str, dict[str, Any], int]] = []
+    complete = 0
+    exhausted = 0
+    for scenario, model, target in plan:
+        status_key = point_key(model["label"], scenario, target)
+        row_status = row_statuses.get(status_key)
+        detail_status = detail_statuses.get(status_key)
+        if row_status == "ok" and (detail_status in {None, "ok"}):
+            complete += 1
+            continue
+        if attempts.get(status_key, 0) >= MAX_POINT_ATTEMPTS:
+            exhausted += 1
+            continue
+        pending.append((scenario, model, target))
+    return pending, {"expected_points": len(plan), "completed_points": complete, "pending_points": len(pending), "exhausted_points": exhausted}
 
 
 def resolve_prompt(config: dict[str, Any], presets: dict[str, Any]) -> tuple[str, str, float, int]:
@@ -149,6 +219,41 @@ def connected_node_count(base_url: str) -> int: return len(connected_nodes(base_
 def set_parallelism_target(base_url: str, target: int) -> None: api_json(base_url, "/api/ui/parallelism-target", "POST", {"parallelism_target": target})
 
 
+def device_endpoint_ip(endpoint: str) -> str:
+    host, _, _port = str(endpoint).rpartition(":")
+    return host or str(endpoint)
+
+
+def canonicalize_allocated_devices(allocated_devices: tuple[str, ...], nodes: list[dict[str, Any]]) -> tuple[str, ...]:
+    exact_matches = {
+        f"{node.get('ip')}:{node.get('port')}": str(node.get("id") or f"{node.get('ip')}:{node.get('port')}")
+        for node in nodes
+        if node.get("ip") and node.get("port")
+    }
+    ids_by_ip: dict[str, set[str]] = defaultdict(set)
+    for node in nodes:
+        ip, node_id = str(node.get("ip") or ""), str(node.get("id") or "")
+        if ip and node_id:
+            ids_by_ip[ip].add(node_id)
+
+    canonical: list[str] = []
+    for endpoint in allocated_devices:
+        stable_id = exact_matches.get(endpoint)
+        if stable_id is None:
+            ip = device_endpoint_ip(endpoint)
+            ip_matches = ids_by_ip.get(ip) or set()
+            stable_id = next(iter(ip_matches)) if len(ip_matches) == 1 else endpoint
+        if stable_id not in canonical:
+            canonical.append(stable_id)
+    return tuple(sorted(canonical))
+
+
+def allocated_device_sets_match(warmup_result: dict[str, Any], measured_result: dict[str, Any], nodes: list[dict[str, Any]]) -> bool:
+    warmup_devices = canonicalize_allocated_devices(request_allocated_devices(warmup_result), nodes)
+    measured_devices = canonicalize_allocated_devices(request_allocated_devices(measured_result), nodes)
+    return warmup_devices == measured_devices
+
+
 def classify_platform(hardware_model: str) -> str:
     name = hardware_model.lower()
     if any(token in name for token in ["iphone", "ipad", "ios"]):
@@ -162,7 +267,7 @@ def detect_cluster_scenario(nodes: list[dict[str, Any]]) -> str:
 
 
 def validate_scenario(base_url: str, scenario: str) -> dict[str, Any]:
-    if scenario not in {"android_only", "ios_only", "heterogeneous"}:
+    if scenario not in VALID_SCENARIOS:
         raise RuntimeError(f"Unsupported scenario {scenario!r}; expected android_only, ios_only, or heterogeneous")
     nodes = connected_nodes(base_url)
     detected = detect_cluster_scenario(nodes)
@@ -175,24 +280,16 @@ def resolve_sweep_targets(base_url: str, targets: Any) -> list[int]:
     return list(range(1, connected_node_count(base_url) + 1)) if targets == "auto" else [int(target) for target in targets]
 
 
-def matches_rerun_point(model_label: str, scenario: str, target: int, rerun_points: list[dict[str, Any]]) -> bool:
-    return any(
-        str(point.get("model_label")) == model_label and
-        str(point.get("scenario")) == scenario and
-        int(point.get("target")) == target
-        for point in rerun_points
-    )
-
-
-def select_model_sweep_plan(base_url: str, config: dict[str, Any], rerun_points: list[dict[str, Any]]) -> list[tuple[str, dict[str, Any], int]]:
+def select_model_sweep_plan(base_url: str, config: dict[str, Any]) -> list[tuple[str, dict[str, Any], int]]:
     plan: list[tuple[str, dict[str, Any], int]] = []
     targets = resolve_sweep_targets(base_url, config["targets"])
-    for scenario in config["scenarios"]:
-        for model in config["models"]:
-            for target in targets:
-                if rerun_points and not matches_rerun_point(model["label"], str(scenario), int(target), rerun_points):
-                    continue
-                plan.append((str(scenario), model, int(target)))
+    scenarios = [str(scenario) for scenario in config.get("scenarios") or []]
+    if len(scenarios) != 1:
+        raise RuntimeError(f"MODEL_SWEEP_CONFIG.scenarios must contain exactly one scenario, got {len(scenarios)}")
+    scenario = validate_scenario_name(scenarios[0])
+    for model in config["models"]:
+        for target in targets:
+            plan.append((scenario, model, int(target)))
     return plan
 
 
@@ -354,10 +451,13 @@ def run_chat_workload_with_retries(base_url: str, model: str, prompt: str, queri
         if len(workload["results"]) == 1:
             warmup_devices = request_allocated_devices(warmup)
             measured_devices = request_allocated_devices(workload["results"][0])
-            if warmup_devices and measured_devices and warmup_devices != measured_devices:
+            current_nodes = connected_nodes(base_url)
+            canonical_warmup_devices = canonicalize_allocated_devices(warmup_devices, current_nodes)
+            canonical_measured_devices = canonicalize_allocated_devices(measured_devices, current_nodes)
+            if warmup_devices and measured_devices and canonical_warmup_devices != canonical_measured_devices:
                 last_error = (
                     "warmup and measured request used different device sets: "
-                    f"{','.join(warmup_devices)} vs {','.join(measured_devices)}"
+                    f"{','.join(canonical_warmup_devices)} vs {','.join(canonical_measured_devices)}"
                 )
                 if attempt >= REQUEST_RETRY_LIMIT:
                     return {"summary": {"queries": queries, "concurrency": concurrency, "wall_time_s": 0.0, "avg_ttft_s": None, "avg_tps": None, "error_count": 1}, "results": [], "errors": [last_error], "server_metrics_before": workload.get("server_metrics_before", {}), "server_metrics_after": workload.get("server_metrics_after", {})}, loading
@@ -429,15 +529,16 @@ def render_line_plot(path: Path, title: str, x_label: str, y_label: str, series_
     write_plot(path, title, x_label, y_label, series_to_points)
 
 
-def write_run_metadata(run_dir: Path, started_at: datetime, finished_at: datetime | None, results: dict[str, Any], status: str) -> None:
+def write_run_metadata(run_dir: Path, started_at: datetime, finished_at: datetime | None, results: dict[str, Any], status: str, scenario: str, base_url: str) -> None:
     write_json(
         run_dir / "run_metadata.json",
         {
             "started_at": started_at.isoformat(),
             "finished_at": finished_at.isoformat() if finished_at else None,
             "status": status,
+            "scenario": scenario,
             "config": {
-                "base_url": BASE_URL,
+                "base_url": base_url,
                 "results_dir": RESULTS_DIR,
                 "run_label": RUN_LABEL,
                 "model_sweep_config": MODEL_SWEEP_CONFIG,
@@ -448,49 +549,80 @@ def write_run_metadata(run_dir: Path, started_at: datetime, finished_at: datetim
 
 
 def run_model_sweep_section(base_url: str, run_dir: Path, config: dict[str, Any], presets: dict[str, Any]) -> dict[str, Any]:
+    scenario = validate_scenario_name(str((config.get("scenarios") or [None])[0]))
     preset_name, prompt, temperature, max_tokens = resolve_prompt(config, presets)
-    out_dir, rows, details = run_dir / "model-sweep", [], []
-    plan = select_model_sweep_plan(base_url, config, RERUN_POINTS)
+    out_dir = run_dir / "model-sweep"
+    rows = load_existing_model_sweep_rows(out_dir)
+    details = read_json(out_dir / "model_sweep.json", [])
     scenario_info_cache: dict[str, dict[str, Any]] = {}
-    current_heading: tuple[str, str] | None = None
-    for scenario, model, target in plan:
-        if scenario not in scenario_info_cache:
-            scenario_info_cache[scenario] = validate_scenario(base_url, scenario)
-        scenario_info = scenario_info_cache[scenario]
-        heading = (scenario, model["label"])
-        if heading != current_heading:
-            print(f"== {scenario} :: {model['label']} ==", flush=True)
-            current_heading = heading
-        print(f"  target={target}", flush=True)
-        try:
-            set_parallelism_target(base_url, target)
-            time.sleep(1.0)
-            workload, loading = run_chat_workload_with_retries(base_url, model["id"], prompt, int(config["queries"]), int(config["concurrency"]), float(temperature), int(max_tokens), preset_name)
-            error = "; ".join(workload["errors"]) if workload["errors"] or not workload["results"] else ""
-            rows.append(sweep_row(model["label"], model["id"], target, scenario, workload if not error else None, error, loading or get_loading_status(base_url)))
-            details.append({"series_label": model["label"], "model": model["id"], "parallelism_target": target, "scenario": scenario, "scenario_info": scenario_info, "status": rows[-1]["status"], "error": error, "loading_status_after": loading, "workload": workload})
-        except Exception as exc:
-            loading = get_loading_status(base_url)
-            rows.append(sweep_row(model["label"], model["id"], target, scenario, None, repr(exc), loading))
-            details.append({"series_label": model["label"], "model": model["id"], "parallelism_target": target, "scenario": scenario, "scenario_info": scenario_info, "status": "error", "error": repr(exc), "loading_status_after": loading})
-        write_model_sweep_artifacts(out_dir, rows, details)
-        print(f"    -> {rows[-1]['status']}", flush=True)
-    return {"rows": rows, "points": len(rows)}
+    rerun_count = 0
+    progress = {"expected_points": 0, "completed_points": 0, "pending_points": 0, "exhausted_points": 0}
+    while True:
+        plan, progress = resolve_incomplete_model_sweep_plan(base_url, config, rows, details)
+        if not plan:
+            break
+        current_heading: tuple[str, str] | None = None
+        attempts = point_attempt_index(details)
+        for scenario, model, target in plan:
+            attempt_number = attempts.get(point_key(model["label"], scenario, target), 0) + 1
+            if scenario not in scenario_info_cache:
+                scenario_info_cache[scenario] = validate_scenario(base_url, scenario)
+            scenario_info = scenario_info_cache[scenario]
+            heading = (scenario, model["label"])
+            if heading != current_heading:
+                print(f"== {scenario} :: {model['label']} ==", flush=True)
+                current_heading = heading
+            print(f"  target={target} attempt={attempt_number}/{MAX_POINT_ATTEMPTS}", flush=True)
+            try:
+                set_parallelism_target(base_url, target)
+                time.sleep(1.0)
+                workload, loading = run_chat_workload_with_retries(base_url, model["id"], prompt, int(config["queries"]), int(config["concurrency"]), float(temperature), int(max_tokens), preset_name)
+                error = "; ".join(workload["errors"]) if workload["errors"] or not workload["results"] else ""
+                updated_row = sweep_row(model["label"], model["id"], target, scenario, workload if not error else None, error, loading or get_loading_status(base_url))
+                updated_detail = {"series_label": model["label"], "model": model["id"], "parallelism_target": target, "scenario": scenario, "scenario_info": scenario_info, "status": updated_row["status"], "error": error, "attempts": attempt_number, "loading_status_after": loading, "workload": workload}
+            except Exception as exc:
+                loading = get_loading_status(base_url)
+                updated_row = sweep_row(model["label"], model["id"], target, scenario, None, repr(exc), loading)
+                updated_detail = {"series_label": model["label"], "model": model["id"], "parallelism_target": target, "scenario": scenario, "scenario_info": scenario_info, "status": "error", "error": repr(exc), "attempts": attempt_number, "loading_status_after": loading}
+            rows = merge_points(rows, [updated_row])
+            details = merge_points(details, [updated_detail])
+            write_model_sweep_artifacts(out_dir, rows, details)
+            rerun_count += 1
+            print(f"    -> {updated_row['status']}", flush=True)
+    status_by_point = point_status_index(rows)
+    attempt_by_point = point_attempt_index(details)
+    remaining = sum(1 for key, status in status_by_point.items() if status != "ok" and attempt_by_point.get(key, 0) < MAX_POINT_ATTEMPTS)
+    exhausted = sum(1 for key, status in status_by_point.items() if status != "ok" and attempt_by_point.get(key, 0) >= MAX_POINT_ATTEMPTS)
+    return {
+        "rows": rows,
+        "points": len(rows),
+        "scenario": scenario,
+        "expected_points": progress["expected_points"],
+        "completed_points": progress["expected_points"] - remaining - exhausted,
+        "rerun_points": rerun_count,
+        "remaining_points": remaining,
+        "exhausted_points": exhausted,
+    }
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     started_at = now_utc()
-    run_dir = resolve_output_root(RESULTS_DIR) / f"{timestamp_slug(started_at)}-{RUN_LABEL}"
-    run_dir.mkdir(parents=True, exist_ok=False)
-    mplconfigdir, base_url = Path(tempfile.mkdtemp(prefix="run-benchmarks-mpl-")), BASE_URL.rstrip("/")
+    results_root = resolve_output_root(RESULTS_DIR)
+    args = build_arg_parser().parse_args(argv)
+    scenario = validate_scenario_name(args.scenario)
+    config = dict(MODEL_SWEEP_CONFIG) | {"scenarios": [scenario]}
+    run_dir = scenario_run_dir(results_root, scenario)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    mplconfigdir, base_url = Path(tempfile.mkdtemp(prefix="run-benchmarks-mpl-")), args.base_url.rstrip("/")
     os.environ["MPLCONFIGDIR"] = str(mplconfigdir)
     results: dict[str, Any] = {}
-    write_run_metadata(run_dir, started_at, None, results, "running")
+    write_run_metadata(run_dir, started_at, None, results, "running", scenario, base_url)
     try:
-        results["model_sweep"] = run_model_sweep_section(base_url, run_dir, MODEL_SWEEP_CONFIG, load_prompt_presets())
-        write_run_metadata(run_dir, started_at, now_utc(), results, "completed")
+        results["model_sweep"] = run_model_sweep_section(base_url, run_dir, config, DEFAULT_PROMPT_PRESETS)
+        final_status = "completed" if results["model_sweep"].get("remaining_points", 0) == 0 else "failed"
+        write_run_metadata(run_dir, started_at, now_utc(), results, final_status, scenario, base_url)
     except Exception:
-        write_run_metadata(run_dir, started_at, now_utc(), results, "failed")
+        write_run_metadata(run_dir, started_at, now_utc(), results, "failed", scenario, base_url)
         raise
     finally:
         shutil.rmtree(mplconfigdir, ignore_errors=True)

@@ -8,6 +8,7 @@ import (
 )
 
 const defaultPort = 4917
+const defaultInstancePort = 49170
 const defaultHost = "0.0.0.0"
 
 func setDefaults(args *args) {
@@ -21,6 +22,11 @@ func setDefaults(args *args) {
 	if args.Port == nil {
 		port := defaultPort
 		args.Port = &port
+	}
+
+	if args.InstancePort == nil {
+		port := defaultInstancePort
+		args.InstancePort = &port
 	}
 
 	if args.IdleTimeout == nil {

@@ -131,7 +131,7 @@ func main() {
 		}
 	}()
 
-	factory := scheduling.NewInstanceFactory(&ramalama, 49170)
+	factory := scheduling.NewInstanceFactory(&ramalama, *args.InstancePort)
 	loadingTracker := &scheduling.LoadingStatusTracker{}
 	metricsCollector := metrics.NewCollector(500)
 	if setter, ok := factory.(scheduling.PhaseCallbackSetter); ok {
@@ -174,7 +174,7 @@ func main() {
 	}
 
 	// serve on the configured host/port
-	log.Printf("Listening on http://%s:%d\n", *args.Host, *args.Port)
+	log.Printf("Listening on http://%s:%d (instance ports start at %d)\n", *args.Host, *args.Port, *args.InstancePort)
 
 	l, err := net.Listen("tcp", fmt.Sprintf("%s:%d", *args.Host, *args.Port))
 	if err != nil {

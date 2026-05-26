@@ -10,3 +10,7 @@ gcasdb-*
 storagedb
 storagedb-*
 *.deb
+models/
+benchmarks/
+.gcasdb
+.gcasdb*

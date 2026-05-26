@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	bbolt "go.etcd.io/bbolt"
 )
@@ -27,7 +28,7 @@ func newHFMetadataStore(path string) (*hfMetadataStore, error) {
 		return nil, err
 	}
 
-	db, err := bbolt.Open(path, 0o600, nil)
+	db, err := bbolt.Open(path, 0o600, &bbolt.Options{Timeout: 250 * time.Millisecond})
 	if err != nil {
 		return nil, err
 	}

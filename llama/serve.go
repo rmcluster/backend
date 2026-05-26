@@ -42,6 +42,11 @@ func (c Llama) ServeCommand(ctx context.Context, args ServeArgs) *exec.Cmd {
 	// -c 4096: cap context window so KV cache stays ~140 MB on phone instead of
 	// the model's default (32K-64K ctx = 4+ GB KV cache that OOMs the phone).
 	cliArgs = append(cliArgs, "-ngl", fmt.Sprint(offloadLayers), "-c", "4096", "--rpc", nodes.String())
+	if offloadLayers > 0 {
+		// Keep all layers on devices while dropping the default 1 GiB fit margin.
+		// If the model still cannot fit, llama.cpp will fail instead of spilling.
+		cliArgs = append(cliArgs, "--fit-target", "0")
+	}
 	if len(args.TensorSplit) > 0 {
 		var split strings.Builder
 		sep = ""
@@ -65,9 +70,15 @@ func (c Llama) ServeCommand(ctx context.Context, args ServeArgs) *exec.Cmd {
 	// deterministic and avoids relying on the runtime Hugging Face resolution
 	// path once a model has already been downloaded.
 	if strings.HasPrefix(args.Model, "hf:") {
+		repo, filename, parsed := parseHFModelRef(args.Model)
 		if cachedPath, ok, err := resolveCachedHFModelPath(args.Model); err == nil && ok {
 			log.Printf("Using cached Hugging Face model for %s at %s", args.Model, cachedPath)
 			cliArgs = append(cliArgs, "--model", cachedPath)
+		} else if parsed {
+			if err != nil {
+				log.Printf("Failed to inspect Hugging Face cache for %s: %v", args.Model, err)
+			}
+			cliArgs = append(cliArgs, "--hf-repo", repo, "--hf-file", filename)
 		} else {
 			if err != nil {
 				log.Printf("Failed to inspect Hugging Face cache for %s: %v", args.Model, err)

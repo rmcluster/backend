@@ -12,12 +12,13 @@ import (
 )
 
 type args struct {
-	Gcasdb      *string
-	Storagedb   *string
-	Ramalama    []string
-	Port        *int
-	Host        *string
-	IdleTimeout *time.Duration
+	Gcasdb       *string
+	Storagedb    *string
+	Ramalama     []string
+	Port         *int
+	InstancePort *int
+	Host         *string
+	IdleTimeout  *time.Duration
 }
 
 // cli should include the name of the command itself
@@ -77,6 +78,24 @@ func parseArgs(cli []string) (a args, rest []string, err error) {
 			}
 
 			a.Port = &port
+
+			cli = cli[2:]
+
+		case "-instance-port":
+			if a.InstancePort != nil {
+				return args{}, nil, fmt.Errorf("%s may only be passed at most once", cli[0])
+			}
+
+			if len(cli) < 2 {
+				return args{}, nil, fmt.Errorf("expected port number after %s", cli[0])
+			}
+
+			port, err := strconv.Atoi(cli[1])
+			if err != nil {
+				return args{}, nil, fmt.Errorf("invalid port number after %s: %v", cli[0], err)
+			}
+
+			a.InstancePort = &port
 
 			cli = cli[2:]
 

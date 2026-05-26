@@ -18,6 +18,10 @@ func TestServeCommandUsesConfiguredOffloadLayers(t *testing.T) {
 	})
 
 	args := cmd.Args
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--fit-target 0") {
+		t.Fatalf("ServeCommand args missing --fit-target 0: %v", args)
+	}
 	for i := 0; i < len(args)-1; i++ {
 		if args[i] == "-ngl" {
 			if got := args[i+1]; got != "8" {
@@ -53,5 +57,22 @@ func TestServeCommandAddsTensorSplitAndNoHost(t *testing.T) {
 	}
 	if !strings.Contains(joined, "--no-host") {
 		t.Fatalf("ServeCommand args missing --no-host: %v", args)
+	}
+}
+
+func TestServeCommandUsesExplicitHFRepoAndFile(t *testing.T) {
+	llm := Llama{Command: []string{"llama-server"}}
+	cmd := llm.ServeCommand(context.Background(), ServeArgs{
+		Model:    "hf:unsloth/Qwen3-0.6B-GGUF:UD-Q4_K_XL.gguf",
+		Port:     8080,
+		RpcNodes: []RpcNode{{Ip: "192.168.1.10", Port: 5000}},
+	})
+
+	args := strings.Join(cmd.Args, " ")
+	if !strings.Contains(args, "--hf-repo unsloth/Qwen3-0.6B-GGUF --hf-file UD-Q4_K_XL.gguf") {
+		t.Fatalf("ServeCommand did not pin explicit HF file: %v", cmd.Args)
+	}
+	if strings.Contains(args, "-hf unsloth/Qwen3-0.6B-GGUF:UD-Q4_K_XL.gguf") {
+		t.Fatalf("ServeCommand unexpectedly used repo-level -hf fallback: %v", cmd.Args)
 	}
 }
