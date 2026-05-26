@@ -112,6 +112,12 @@ type chatSessionRecord struct {
 // ---- Core handlers ----
 
 func (s *UIApi) handleAPIRoot(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.Header().Del("Access-Control-Allow-Methods")
+		w.Header().Set("Access-Control-Allow-Methods", "GET")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -125,6 +131,12 @@ func (s *UIApi) handleAPIRoot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *UIApi) handleAPIConnectInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.Header().Del("Access-Control-Allow-Methods")
+		w.Header().Set("Access-Control-Allow-Methods", "GET")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -150,6 +162,12 @@ func (s *UIApi) handleAPIConnectInfo(w http.ResponseWriter, r *http.Request) {
 // ---- Chat session handlers ----
 
 func (s *UIApi) handleAPIStartChat(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.Header().Del("Access-Control-Allow-Methods")
+		w.Header().Set("Access-Control-Allow-Methods", "POST")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	if r.Method != http.MethodPost {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -197,6 +215,12 @@ func (s *UIApi) handleAPIStartChat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *UIApi) handleAPIChatRoute(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.Header().Del("Access-Control-Allow-Methods")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	trimmed := strings.TrimPrefix(r.URL.Path, "/api/ui/chats/")
 	parts := strings.SplitN(strings.Trim(trimmed, "/"), "/", 2)
 
@@ -423,6 +447,12 @@ func firstNonLoopbackIPv4() (string, bool) {
 // ---- Model handlers ----
 
 func (s *UIApi) handleAPIModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.Header().Del("Access-Control-Allow-Methods")
+		w.Header().Set("Access-Control-Allow-Methods", "GET")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -475,6 +505,12 @@ func (s *UIApi) handleAPIModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *UIApi) handleAPISearchModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.Header().Del("Access-Control-Allow-Methods")
+		w.Header().Set("Access-Control-Allow-Methods", "GET")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -507,6 +543,12 @@ func (s *UIApi) handleAPISearchModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *UIApi) handleAPIAddHFModel(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.Header().Del("Access-Control-Allow-Methods")
+		w.Header().Set("Access-Control-Allow-Methods", "POST")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	if r.Method != http.MethodPost {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -543,6 +585,12 @@ func (s *UIApi) handleAPIAddHFModel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *UIApi) handleAPILocalModelUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.Header().Del("Access-Control-Allow-Methods")
+		w.Header().Set("Access-Control-Allow-Methods", "POST")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	if r.Method != http.MethodPost {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -590,6 +638,12 @@ func (s *UIApi) handleAPILocalModelUpload(w http.ResponseWriter, r *http.Request
 }
 
 func (s *UIApi) handleLoadingStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.Header().Del("Access-Control-Allow-Methods")
+		w.Header().Set("Access-Control-Allow-Methods", "GET")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	type response struct {
 		Model       string  `json:"model"`
 		Phase       string  `json:"phase"`
@@ -608,6 +662,12 @@ func (s *UIApi) handleLoadingStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *UIApi) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.Header().Del("Access-Control-Allow-Methods")
+		w.Header().Set("Access-Control-Allow-Methods", "GET")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
