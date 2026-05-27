@@ -172,8 +172,87 @@ func (f *fakeCAS) FreeSpace(_ context.Context) (int64, error) { return 1 << 30, 
 // Wrap fakeCAS as a GCAS for the constructor (AddNode/RemoveNode are no-ops).
 type fakeGCAS struct{ *fakeCAS }
 
-func (f *fakeGCAS) AddNode(_ gcas.NamedCAS)    {}
-func (f *fakeGCAS) RemoveNode(_ gcas.NamedCAS) {}
+func (f *fakeGCAS) AddNode(_ gcas.NamedCAS)     {}
+func (f *fakeGCAS) RemoveNode(_ string)         {}
+func (f *fakeGCAS) ReplaceNode(_ gcas.NamedCAS) {}
+
+func newServiceWithGCAS(t *testing.T) (*StorageServiceImpl, *fakeCAS) {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := OpenDB(dbPath, 1)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	cas := newFakeCAS()
+	svc, err := NewStorageService(db, &fakeGCAS{cas})
+	if err != nil {
+		t.Fatalf("NewStorageService: %v", err)
+	}
+	return svc, cas
+}
+
+func TestStorageServiceDefaultChunkSize(t *testing.T) {
+	svc, _ := newServiceWithGCAS(t)
+	if got := svc.GetChunkSize(); got != DefaultChunkSize {
+		t.Fatalf("GetChunkSize() = %d, want %d", got, DefaultChunkSize)
+	}
+}
+
+func TestStorageServiceCustomChunkSizeSplitsWrites(t *testing.T) {
+	ctx := context.Background()
+	svc, cas := newServiceWithGCAS(t)
+	if err := svc.SetChunkSize(4); err != nil {
+		t.Fatalf("SetChunkSize: %v", err)
+	}
+
+	f, err := svc.OpenFile(ctx, "/split.txt", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte("abcdefghij")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(cas.data) != 3 {
+		t.Fatalf("want 3 chunks in GCAS, got %d", len(cas.data))
+	}
+}
+
+func TestStorageServiceChunkSizeOnlyAffectsNewWrites(t *testing.T) {
+	ctx := context.Background()
+	svc, cas := newServiceWithGCAS(t)
+
+	mustWrite(t, svc, "/before.txt", []byte("abcdefghij"))
+	if len(cas.data) != 1 {
+		t.Fatalf("before chunk-size change want 1 chunk, got %d", len(cas.data))
+	}
+
+	if err := svc.SetChunkSize(4); err != nil {
+		t.Fatalf("SetChunkSize: %v", err)
+	}
+	mustWrite(t, svc, "/after.txt", []byte("abcdefghij"))
+	if len(cas.data) != 4 {
+		t.Fatalf("after chunk-size change want 4 total chunks, got %d", len(cas.data))
+	}
+
+	r, err := svc.OpenFile(ctx, "/before.txt", os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "abcdefghij" {
+		t.Fatalf("got %q, want %q", got, "abcdefghij")
+	}
+}
 
 func TestOpenFileRead(t *testing.T) {
 	ctx := context.Background()
@@ -265,23 +344,6 @@ func TestOpenDirReaddir(t *testing.T) {
 	if len(entries) != 2 {
 		t.Errorf("want 2 entries, got %d", len(entries))
 	}
-}
-
-func newServiceWithGCAS(t *testing.T) (*StorageServiceImpl, *fakeCAS) {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	db, err := OpenDB(dbPath, 1)
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	cas := newFakeCAS()
-	svc, err := NewStorageService(db, &fakeGCAS{cas})
-	if err != nil {
-		t.Fatalf("NewStorageService: %v", err)
-	}
-	return svc, cas
 }
 
 func TestOpenFileWriteCreate(t *testing.T) {
