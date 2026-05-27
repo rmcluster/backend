@@ -14,10 +14,16 @@ import (
 	"github.com/rmcluster/backend/tracker"
 )
 
+type schedulerControl interface {
+	GetParallelismTarget() int
+	SetParallelismTarget(int)
+}
+
 type UIApi struct {
 	tracker       *tracker.Tracker
 	llama         llama.Llama
 	loadingStatus scheduling.LoadingStatusProvider // may be nil
+	scheduler     schedulerControl
 
 	connectLock   sync.Mutex
 	connectTokens map[string]time.Time
@@ -30,12 +36,13 @@ var (
 	hfStore     *hfMetadataStore
 )
 
-func New(tracker *tracker.Tracker, llama llama.Llama, loadingStatus scheduling.LoadingStatusProvider) *UIApi {
+func New(tracker *tracker.Tracker, llama llama.Llama, loadingStatus scheduling.LoadingStatusProvider, scheduler schedulerControl) *UIApi {
 	initHFMetadataStoreFromEnv()
 	return &UIApi{
 		tracker:       tracker,
 		llama:         llama,
 		loadingStatus: loadingStatus,
+		scheduler:     scheduler,
 		connectTokens: make(map[string]time.Time),
 		chatSessions:  make(map[string]chatSessionRecord),
 	}
@@ -80,6 +87,7 @@ func (s *UIApi) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ui/connect-info", s.handleAPIConnectInfo)
 	mux.HandleFunc("/api/ui/chats", s.handleAPIStartChat)
 	mux.HandleFunc("/api/ui/chats/", s.handleAPIChatRoute)
+	mux.HandleFunc("/api/ui/parallelism-target", s.handleParallelismTarget)
 }
 
 func (s *UIApi) listModelEntries() []modelEntry {
