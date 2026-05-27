@@ -14,6 +14,7 @@ import (
 	"github.com/wk-y/rama-swap/llama"
 	"github.com/wk-y/rama-swap/microservices/dashboard"
 	"github.com/wk-y/rama-swap/microservices/homepage"
+	"github.com/wk-y/rama-swap/microservices/metrics"
 	"github.com/wk-y/rama-swap/microservices/scheduling"
 	"github.com/wk-y/rama-swap/microservices/webdavservice"
 	"github.com/wk-y/rama-swap/server"
@@ -126,11 +127,12 @@ func main() {
 		setter.SetPhaseCallback(loadingTracker.OnPhaseUpdate)
 		setter.SetLayersCallback(loadingTracker.OnLayersKnown)
 	}
+	metricsCollector := metrics.NewCollector(500)
 	scheduler := scheduling.NewPartitioningScheduler(factory, 3)
 	tracker.DefaultTracker.Subscribe(schedulersubscriber.NewSchedulerSubscriber(scheduler))
 	cas := gcas.NewGCAS(gcasdb)
 	tracker.DefaultTracker.Subscribe(gcassubscriber.NewGCASSubscriber(cas))
-	server := server.NewServer(ramalama, scheduler)
+	server := server.NewServer(ramalama, scheduler, metricsCollector)
 	dashboard := dashboard.NewDashboard(tracker.DefaultTracker)
 	dashboard.RegisterHandlers(mux)
 	homepage := homepage.NewHomepage()
@@ -154,6 +156,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create storage service: %v", err)
 	}
+	ui := uiapi.New(tracker.DefaultTracker, ramalama, loadingTracker, metricsCollector)
+	ui.RegisterHandlers(mux)
 	webdavService := webdavservice.NewWebDavService(storageSvc)
 	webdavService.RegisterGinHandlers(router)
 

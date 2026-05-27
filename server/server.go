@@ -11,6 +11,7 @@ import (
 
 	"github.com/wk-y/rama-swap/internal/util"
 	"github.com/wk-y/rama-swap/llama"
+	"github.com/wk-y/rama-swap/microservices/metrics"
 	"github.com/wk-y/rama-swap/microservices/scheduling"
 )
 
@@ -20,15 +21,17 @@ type Server struct {
 
 	ramalama  llama.Llama
 	scheduler scheduling.Scheduler
+	metrics   *metrics.Collector
 
 	demangleCacheLock sync.RWMutex
 	demangleCache     map[string]string
 }
 
-func NewServer(r llama.Llama, scheduler scheduling.Scheduler) *Server {
+func NewServer(r llama.Llama, scheduler scheduling.Scheduler, metricsCollector *metrics.Collector) *Server {
 	return &Server{
 		ramalama:      r,
 		scheduler:     scheduler,
+		metrics:       metricsCollector,
 		demangleCache: map[string]string{},
 	}
 }
@@ -62,7 +65,7 @@ func (s *Server) proxyEndpoint(w http.ResponseWriter, r *http.Request, modelFind
 		Closer: body.Close,
 	}
 
-	task := newTaskWithCompletion(newProxyTask(model, w, r))
+	task := newTaskWithCompletion(newProxyTask(model, w, r, s.metrics))
 
 	s.scheduler.OnNewTask(task)
 
@@ -107,7 +110,6 @@ func (s *Server) handleCompletions(w http.ResponseWriter, r *http.Request) {
 		return *modelGet.Model, nil
 	})
 }
-
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	internalServerError := func(reason string) {

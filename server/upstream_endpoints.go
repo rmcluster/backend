@@ -17,12 +17,11 @@ func (s *Server) serveUpstream(w http.ResponseWriter, r *http.Request) {
 
 	r.URL.Path = "/" + r.PathValue("rest")
 
-	task := newTaskWithCompletion(newProxyTask(name, w, r))
+	task := newTaskWithCompletion(newProxyTask(name, w, r, s.metrics))
 	s.scheduler.OnNewTask(task)
 
 	<-task.done
 }
-
 
 func (s *Server) demangle(name string) (string, error) {
 	if s.ModelNameMangler == nil {

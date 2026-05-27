@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/wk-y/rama-swap/llama"
+	"github.com/wk-y/rama-swap/microservices/metrics"
 	"github.com/wk-y/rama-swap/microservices/scheduling"
 	"github.com/wk-y/rama-swap/tracker"
 )
@@ -18,25 +19,26 @@ type UIApi struct {
 	tracker       *tracker.Tracker
 	llama         llama.Llama
 	loadingStatus scheduling.LoadingStatusProvider // may be nil
+	metrics       *metrics.Collector
 
 	connectLock   sync.Mutex
 	connectTokens map[string]time.Time
 	chatLock      sync.Mutex
-	chatSessions   map[string]chatSessionRecord
+	chatSessions  map[string]chatSessionRecord
 }
-
 
 var (
 	hfStoreOnce sync.Once
 	hfStore     *hfMetadataStore
 )
 
-func New(tracker *tracker.Tracker, llama llama.Llama, loadingStatus scheduling.LoadingStatusProvider) *UIApi {
+func New(tracker *tracker.Tracker, llama llama.Llama, loadingStatus scheduling.LoadingStatusProvider, metricsCollector *metrics.Collector) *UIApi {
 	initHFMetadataStoreFromEnv()
 	return &UIApi{
-		tracker:        tracker,
-		llama:          llama,
-		loadingStatus:  loadingStatus,
+		tracker:       tracker,
+		llama:         llama,
+		loadingStatus: loadingStatus,
+		metrics:       metricsCollector,
 		connectTokens: make(map[string]time.Time),
 		chatSessions:  make(map[string]chatSessionRecord),
 	}
@@ -81,6 +83,7 @@ func (s *UIApi) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ui/connect-info", s.handleAPIConnectInfo)
 	mux.HandleFunc("/api/ui/chats", s.handleAPIStartChat)
 	mux.HandleFunc("/api/ui/chats/", s.handleAPIChatRoute)
+	mux.HandleFunc("/api/ui/metrics", s.handleMetrics)
 }
 
 func (s *UIApi) listModelEntries() []modelEntry {

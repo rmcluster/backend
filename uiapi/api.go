@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
 )
 
 // ---- API types ----
@@ -607,6 +606,18 @@ func (s *UIApi) handleLoadingStatus(w http.ResponseWriter, r *http.Request) {
 	writeAPIJSON(w, http.StatusOK, resp)
 }
 
+func (s *UIApi) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.metrics == nil {
+		writeAPIError(w, http.StatusNotImplemented, "metrics unavailable")
+		return
+	}
+
+	writeAPIJSON(w, http.StatusOK, s.metrics.Snapshot())
+}
 func (s *UIApi) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
