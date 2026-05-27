@@ -126,7 +126,7 @@ func main() {
 	cas := gcas.NewGCAS(gcasdb)
 	tracker.DefaultTracker.Subscribe(gcassubscriber.NewGCASSubscriber(cas))
 	server := server.NewServer(ramalama, scheduler)
-	ui := uiapi.New(tracker.DefaultTracker, ramalama, loadingTracker)
+	ui := uiapi.New(tracker.DefaultTracker, ramalama, loadingTracker, scheduler)
 	ui.RegisterHandlers(mux)
 
 	if args.Storagedb == nil {
