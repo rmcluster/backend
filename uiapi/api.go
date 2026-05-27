@@ -77,6 +77,14 @@ type connectInfoResponse struct {
 	TokenExpiresInSeconds int    `json:"token_expires_in_seconds"`
 }
 
+type parallelismTargetResponse struct {
+	ParallelismTarget int `json:"parallelism_target"`
+}
+
+type parallelismTargetRequest struct {
+	ParallelismTarget int `json:"parallelism_target"`
+}
+
 // ---- Chat session types ----
 
 type startChatRequest struct {
@@ -678,6 +686,41 @@ func (s *UIApi) handleLoadingStatus(w http.ResponseWriter, r *http.Request) {
 	resp.NodeCount = len(s.tracker.GetServers())
 
 	writeAPIJSON(w, http.StatusOK, resp)
+}
+
+func (s *UIApi) handleParallelismTarget(w http.ResponseWriter, r *http.Request) {
+	if s.scheduler == nil {
+		writeAPIError(w, http.StatusNotImplemented, "scheduler controls unavailable")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		writeAPIJSON(w, http.StatusOK, parallelismTargetResponse{
+			ParallelismTarget: s.scheduler.GetParallelismTarget(),
+		})
+	case http.MethodPost:
+		var req parallelismTargetRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		connectedNodes := len(s.tracker.GetServers())
+		if connectedNodes < 1 {
+			writeAPIError(w, http.StatusBadRequest, "parallelism_target cannot be set while no nodes are connected")
+			return
+		}
+		if req.ParallelismTarget < 1 || req.ParallelismTarget > connectedNodes {
+			writeAPIError(w, http.StatusBadRequest, fmt.Sprintf("parallelism_target must be between 1 and %d", connectedNodes))
+			return
+		}
+		s.scheduler.SetParallelismTarget(req.ParallelismTarget)
+		writeAPIJSON(w, http.StatusOK, parallelismTargetResponse{
+			ParallelismTarget: s.scheduler.GetParallelismTarget(),
+		})
+	default:
+		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
 }
 
 func (s *UIApi) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {

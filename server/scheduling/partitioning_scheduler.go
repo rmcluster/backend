@@ -3,6 +3,7 @@ package scheduling
 import (
 	"log"
 	"math"
+	"sync/atomic"
 	"time"
 )
 
@@ -45,9 +46,9 @@ func NewPartitioningScheduler(instanceFactory InstanceFactory, parallelismTarget
 		taskCancelledChan: make(chan Task, 16),
 		taskCompletedChan: make(chan TaskCompletionMessage, 16),
 		instanceDeadChan:  make(chan instanceInfo, 16),
-		parallelismTarget: parallelismTarget,
 		idleBias:          10 * time.Second,
 	}
+	scheduler.parallelismTarget.Store(int32(max(parallelismTarget, 1)))
 	go scheduler.run()
 	return scheduler
 }
@@ -70,7 +71,7 @@ type PartitioningScheduler struct {
 	unallocatedNodes  map[string]Node
 	allocatedNodes    map[string]NodeAllocationInfo
 	idleInstances     map[string][]instanceInfo
-	parallelismTarget int           // target for how many nodes to allocate per instance
+	parallelismTarget atomic.Int32  // target for how many nodes to allocate per instance
 	idleBias          time.Duration // how many seconds of "advantage" tasks for an idle instance gets
 
 	// channels for the different notification types
@@ -112,6 +113,18 @@ func (s *PartitioningScheduler) OnNodeDisconnect(node Node) {
 // OnTaskCancelled implements [Scheduler].
 func (s *PartitioningScheduler) OnTaskCancelled(task Task) {
 	s.taskCancelledChan <- task
+}
+
+func (s *PartitioningScheduler) GetParallelismTarget() int {
+	return int(s.parallelismTarget.Load())
+}
+
+func (s *PartitioningScheduler) SetParallelismTarget(n int) {
+	if n < 1 {
+		n = 1
+	}
+	s.parallelismTarget.Store(int32(n))
+	log.Printf("PartitioningScheduler: parallelism target set to %d", n)
 }
 
 func (s *PartitioningScheduler) run() {
@@ -197,7 +210,7 @@ taskHandlerLoop:
 						}
 					}
 
-					if len(s.unallocatedNodes) >= s.parallelismTarget {
+					if len(s.unallocatedNodes) >= s.GetParallelismTarget() {
 						break killLoop
 					}
 				}
@@ -232,9 +245,10 @@ taskHandlerLoop:
 
 		// create new instance
 		nodes := []Node{}
+		target := s.GetParallelismTarget()
 		for _, node := range s.unallocatedNodes {
 			nodes = append(nodes, node)
-			if len(nodes) == s.parallelismTarget {
+			if len(nodes) == target {
 				break
 			}
 		}
