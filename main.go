@@ -12,8 +12,6 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/wk-y/rama-swap/llama"
-	"github.com/wk-y/rama-swap/microservices/dashboard"
-	"github.com/wk-y/rama-swap/microservices/homepage"
 	"github.com/wk-y/rama-swap/microservices/scheduling"
 	"github.com/wk-y/rama-swap/microservices/webdavservice"
 	"github.com/wk-y/rama-swap/server"
@@ -128,10 +126,6 @@ func main() {
 	cas := gcas.NewGCAS(gcasdb)
 	tracker.DefaultTracker.Subscribe(gcassubscriber.NewGCASSubscriber(cas))
 	server := server.NewServer(ramalama, scheduler)
-	dashboard := dashboard.NewDashboard(tracker.DefaultTracker)
-	dashboard.RegisterHandlers(mux)
-	homepage := homepage.NewHomepage()
-	homepage.RegisterHandlers(mux)
 	ui := uiapi.New(tracker.DefaultTracker, ramalama, loadingTracker)
 	ui.RegisterHandlers(mux)
 
