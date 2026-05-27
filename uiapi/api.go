@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
 )
 
 // ---- API types ----
@@ -75,6 +74,14 @@ type connectInfoResponse struct {
 	Token                 string `json:"token"`
 	ConnectURI            string `json:"connect_uri"`
 	TokenExpiresInSeconds int    `json:"token_expires_in_seconds"`
+}
+
+type storageChunkSizeResponse struct {
+	ChunkSizeBytes int64 `json:"chunk_size_bytes"`
+}
+
+type storageChunkSizeRequest struct {
+	ChunkSizeBytes int64 `json:"chunk_size_bytes"`
 }
 
 // ---- Chat session types ----
@@ -661,6 +668,34 @@ func (s *UIApi) handleLoadingStatus(w http.ResponseWriter, r *http.Request) {
 	writeAPIJSON(w, http.StatusOK, resp)
 }
 
+func (s *UIApi) handleStorageChunkSize(w http.ResponseWriter, r *http.Request) {
+	if s.storage == nil {
+		writeAPIError(w, http.StatusNotImplemented, "storage chunk controls unavailable")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		writeAPIJSON(w, http.StatusOK, storageChunkSizeResponse{
+			ChunkSizeBytes: s.storage.GetChunkSize(),
+		})
+	case http.MethodPost:
+		var req storageChunkSizeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if err := s.storage.SetChunkSize(req.ChunkSizeBytes); err != nil {
+			writeAPIError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, storageChunkSizeResponse{
+			ChunkSizeBytes: s.storage.GetChunkSize(),
+		})
+	default:
+		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
 func (s *UIApi) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
 		w.Header().Del("Access-Control-Allow-Methods")
