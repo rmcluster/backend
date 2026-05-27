@@ -14,10 +14,15 @@ import (
 	"github.com/rmcluster/backend/tracker"
 )
 
+type storageChunkControl interface {
+	GetChunkSize() int64
+	SetChunkSize(int64) error
+}
 type UIApi struct {
 	tracker       *tracker.Tracker
 	llama         llama.Llama
 	loadingStatus scheduling.LoadingStatusProvider // may be nil
+	storage       storageChunkControl
 
 	connectLock   sync.Mutex
 	connectTokens map[string]time.Time
@@ -30,12 +35,13 @@ var (
 	hfStore     *hfMetadataStore
 )
 
-func New(tracker *tracker.Tracker, llama llama.Llama, loadingStatus scheduling.LoadingStatusProvider) *UIApi {
+func New(tracker *tracker.Tracker, llama llama.Llama, loadingStatus scheduling.LoadingStatusProvider, storage storageChunkControl) *UIApi {
 	initHFMetadataStoreFromEnv()
 	return &UIApi{
 		tracker:       tracker,
 		llama:         llama,
 		loadingStatus: loadingStatus,
+		storage:       storage,
 		connectTokens: make(map[string]time.Time),
 		chatSessions:  make(map[string]chatSessionRecord),
 	}
@@ -80,6 +86,7 @@ func (s *UIApi) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ui/connect-info", s.handleAPIConnectInfo)
 	mux.HandleFunc("/api/ui/chats", s.handleAPIStartChat)
 	mux.HandleFunc("/api/ui/chats/", s.handleAPIChatRoute)
+	mux.HandleFunc("/api/ui/storage-chunk-size", s.handleStorageChunkSize)
 }
 
 func (s *UIApi) listModelEntries() []modelEntry {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/rmcluster/backend/server/gcas"
@@ -18,13 +19,16 @@ type StorageService interface {
 	// GarbageCollect requests that the storage service delete unused data chunks.
 	// The actual behavior of GarbageCollect is implementation defined.
 	GarbageCollect(ctx context.Context) error
+	GetChunkSize() int64
+	SetChunkSize(int64) error
 }
 
 type StorageServiceImpl struct {
 	// GCAS to store data chunks
 	gcas gcas.GCAS
 	// SQL database to store metadata
-	db *sql.DB
+	db        *sql.DB
+	chunkSize atomic.Int64
 }
 
 type metaFileInfo struct {
@@ -288,7 +292,7 @@ func (s *StorageServiceImpl) openWrite(ctx context.Context, name string, perm os
 		mode = 0o666
 	}
 
-	return newWriteFile(ctx, p, mode, s.gcas, s.commitWrite), nil
+	return newWriteFile(ctx, p, mode, s.gcas, s.commitWrite, s.GetChunkSize()), nil
 }
 
 func (s *StorageServiceImpl) commitWrite(ctx context.Context, p string, mode fs.FileMode, chunks []chunkRef, totalSize int64) error {
@@ -669,6 +673,26 @@ func (s *StorageServiceImpl) Stat(ctx context.Context, name string) (os.FileInfo
 	return nil, fmt.Errorf("stat %s (file): %w", p, err)
 }
 
+const (
+	minChunkSize int64 = 1
+	maxChunkSize int64 = 1 << 30
+)
+
+func (s *StorageServiceImpl) GetChunkSize() int64 {
+	if size := s.chunkSize.Load(); size > 0 {
+		return size
+	}
+	return DefaultChunkSize
+}
+
+func (s *StorageServiceImpl) SetChunkSize(size int64) error {
+	if size < minChunkSize || size > maxChunkSize {
+		return fmt.Errorf("chunk_size_bytes must be between %d and %d", minChunkSize, maxChunkSize)
+	}
+	s.chunkSize.Store(size)
+	return nil
+}
+
 // interface check
 var _ StorageService = (*StorageServiceImpl)(nil)
 
@@ -676,8 +700,10 @@ func NewStorageService(db *sql.DB, gcas gcas.GCAS) (*StorageServiceImpl, error) 
 	if db == nil {
 		return nil, errors.New("storage: nil database")
 	}
-	return &StorageServiceImpl{
+	svc := &StorageServiceImpl{
 		db:   db,
 		gcas: gcas,
-	}, nil
+	}
+	svc.chunkSize.Store(DefaultChunkSize)
+	return svc, nil
 }
