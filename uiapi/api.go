@@ -685,8 +685,13 @@ func (s *UIApi) handleParallelismTarget(w http.ResponseWriter, r *http.Request) 
 			writeAPIError(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
-		if req.ParallelismTarget < 1 {
-			writeAPIError(w, http.StatusBadRequest, "parallelism_target must be 1 or more")
+		connectedNodes := len(s.tracker.GetServers())
+		if connectedNodes < 1 {
+			writeAPIError(w, http.StatusBadRequest, "parallelism_target cannot be set while no nodes are connected")
+			return
+		}
+		if req.ParallelismTarget < 1 || req.ParallelismTarget > connectedNodes {
+			writeAPIError(w, http.StatusBadRequest, fmt.Sprintf("parallelism_target must be between 1 and %d", connectedNodes))
 			return
 		}
 		s.scheduler.SetParallelismTarget(req.ParallelismTarget)
