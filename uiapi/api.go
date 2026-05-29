@@ -706,7 +706,7 @@ func (s *UIApi) handleParallelismTarget(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if req.ParallelismTarget < 1 {
-			writeAPIError(w, http.StatusBadRequest, "parallelism_target must be more than 1")
+			writeAPIError(w, http.StatusBadRequest, "parallelism_target must be 1 or more")
 			return
 		}
 		s.scheduler.SetParallelismTarget(req.ParallelismTarget)
