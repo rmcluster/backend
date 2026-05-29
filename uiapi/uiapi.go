@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wk-y/rama-swap/llama"
-	"github.com/wk-y/rama-swap/microservices/scheduling"
-	"github.com/wk-y/rama-swap/tracker"
+	"github.com/rmcluster/backend/llama"
+	"github.com/rmcluster/backend/microservices/scheduling"
+	"github.com/rmcluster/backend/tracker"
 )
 
 type UIApi struct {
@@ -22,9 +22,8 @@ type UIApi struct {
 	connectLock   sync.Mutex
 	connectTokens map[string]time.Time
 	chatLock      sync.Mutex
-	chatSessions   map[string]chatSessionRecord
+	chatSessions  map[string]chatSessionRecord
 }
-
 
 var (
 	hfStoreOnce sync.Once
@@ -34,9 +33,9 @@ var (
 func New(tracker *tracker.Tracker, llama llama.Llama, loadingStatus scheduling.LoadingStatusProvider) *UIApi {
 	initHFMetadataStoreFromEnv()
 	return &UIApi{
-		tracker:        tracker,
-		llama:          llama,
-		loadingStatus:  loadingStatus,
+		tracker:       tracker,
+		llama:         llama,
+		loadingStatus: loadingStatus,
 		connectTokens: make(map[string]time.Time),
 		chatSessions:  make(map[string]chatSessionRecord),
 	}

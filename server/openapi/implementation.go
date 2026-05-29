@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	internal "github.com/wk-y/rama-swap/server/openapi/internal/generated/go"
-	"github.com/wk-y/rama-swap/tracker"
+	internal "github.com/rmcluster/backend/server/openapi/internal/generated/go"
+	"github.com/rmcluster/backend/tracker"
 )
 
 func NewRouter() *gin.Engine {

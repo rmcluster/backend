@@ -1,6 +1,6 @@
 package schedulersubscriber
 
-import "github.com/wk-y/rama-swap/microservices/scheduling"
+import "github.com/rmcluster/backend/microservices/scheduling"
 
 type node struct {
 	id      string

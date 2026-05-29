@@ -7,8 +7,8 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	generated "github.com/wk-y/rama-swap/cmd/linux-client/openapi/generated/go"
-	"github.com/wk-y/rama-swap/server/gcas"
+	generated "github.com/rmcluster/backend/cmd/linux-client/openapi/generated/go"
+	"github.com/rmcluster/backend/server/gcas"
 )
 
 func NewRouter(cas gcas.CAS) *gin.Engine {
