@@ -6,7 +6,7 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/rmcluster/backend/microservices/scheduling"
+	"github.com/rmcluster/backend/server/scheduling"
 )
 
 type proxyTask struct {

@@ -12,8 +12,8 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/rmcluster/backend/llama"
-	"github.com/rmcluster/backend/microservices/scheduling"
-	"github.com/rmcluster/backend/microservices/webdavservice"
+	"github.com/rmcluster/backend/server/scheduling"
+	"github.com/rmcluster/backend/server/webdavservice"
 	"github.com/rmcluster/backend/server"
 	"github.com/rmcluster/backend/server/gcas"
 	gcassubscriber "github.com/rmcluster/backend/server/gcas_subscriber"

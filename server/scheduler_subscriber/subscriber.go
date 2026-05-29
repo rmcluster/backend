@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/rmcluster/backend/microservices/scheduling"
+	"github.com/rmcluster/backend/server/scheduling"
 	"github.com/rmcluster/backend/tracker"
 )
 
