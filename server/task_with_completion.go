@@ -1,6 +1,6 @@
 package server
 
-import "github.com/rmcluster/backend/microservices/scheduling"
+import "github.com/rmcluster/backend/server/scheduling"
 
 type taskWithCompletion struct {
 	inner scheduling.Task

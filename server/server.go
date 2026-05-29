@@ -11,7 +11,7 @@ import (
 
 	"github.com/rmcluster/backend/internal/util"
 	"github.com/rmcluster/backend/llama"
-	"github.com/rmcluster/backend/microservices/scheduling"
+	"github.com/rmcluster/backend/server/scheduling"
 )
 
 type Server struct {

@@ -1,6 +1,6 @@
 package schedulersubscriber
 
-import "github.com/rmcluster/backend/microservices/scheduling"
+import "github.com/rmcluster/backend/server/scheduling"
 
 type node struct {
 	id      string

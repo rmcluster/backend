@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/rmcluster/backend/llama"
-	"github.com/rmcluster/backend/microservices/scheduling"
+	"github.com/rmcluster/backend/server/scheduling"
 	"github.com/rmcluster/backend/tracker"
 )
 
