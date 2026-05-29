@@ -8,7 +8,7 @@ import (
 	"io/fs"
 	"time"
 
-	"github.com/wk-y/rama-swap/server/gcas"
+	"github.com/rmcluster/backend/server/gcas"
 )
 
 const ChunkSize = 8 * 1024 * 1024 //8 MiB chunks for now, can be changed later to other value, or made variable with file size

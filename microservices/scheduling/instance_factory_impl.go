@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/wk-y/rama-swap/llama"
+	"github.com/rmcluster/backend/llama"
 )
 
 func NewInstanceFactory(llmService *llama.Llama, lowestPort int) InstanceFactory {

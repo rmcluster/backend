@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/wk-y/rama-swap/llama"
+	"github.com/rmcluster/backend/llama"
 )
 
 type modelEntry struct {

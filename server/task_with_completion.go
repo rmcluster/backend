@@ -1,6 +1,6 @@
 package server
 
-import "github.com/wk-y/rama-swap/microservices/scheduling"
+import "github.com/rmcluster/backend/microservices/scheduling"
 
 type taskWithCompletion struct {
 	inner scheduling.Task

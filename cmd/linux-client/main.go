@@ -11,8 +11,8 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/wk-y/rama-swap/cmd/linux-client/fscas"
-	"github.com/wk-y/rama-swap/cmd/linux-client/openapi"
+	"github.com/rmcluster/backend/cmd/linux-client/fscas"
+	"github.com/rmcluster/backend/cmd/linux-client/openapi"
 )
 
 // time to wait after failed announcement

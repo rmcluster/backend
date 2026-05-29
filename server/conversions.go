@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/wk-y/rama-swap/llama"
+	"github.com/rmcluster/backend/llama"
 )
 
 func convertModelList(ramaModels []llama.Model) ([]Model, error) {

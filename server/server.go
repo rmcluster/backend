@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/wk-y/rama-swap/internal/util"
-	"github.com/wk-y/rama-swap/llama"
-	"github.com/wk-y/rama-swap/microservices/scheduling"
+	"github.com/rmcluster/backend/internal/util"
+	"github.com/rmcluster/backend/llama"
+	"github.com/rmcluster/backend/microservices/scheduling"
 )
 
 type Server struct {
@@ -107,7 +107,6 @@ func (s *Server) handleCompletions(w http.ResponseWriter, r *http.Request) {
 		return *modelGet.Model, nil
 	})
 }
-
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	internalServerError := func(reason string) {

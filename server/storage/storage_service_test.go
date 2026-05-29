@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wk-y/rama-swap/server/gcas"
+	"github.com/rmcluster/backend/server/gcas"
 )
 
 func newTestService(t *testing.T) *StorageServiceImpl {

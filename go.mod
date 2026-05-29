@@ -1,4 +1,4 @@
-module github.com/wk-y/rama-swap
+module github.com/rmcluster/backend
 
 go 1.25.1
 

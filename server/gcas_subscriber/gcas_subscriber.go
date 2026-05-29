@@ -1,8 +1,8 @@
 package gcassubscriber
 
 import (
-	"github.com/wk-y/rama-swap/server/gcas"
-	"github.com/wk-y/rama-swap/tracker"
+	"github.com/rmcluster/backend/server/gcas"
+	"github.com/rmcluster/backend/tracker"
 )
 
 func NewGCASSubscriber(g gcas.GCAS) *GCASSubscriber {

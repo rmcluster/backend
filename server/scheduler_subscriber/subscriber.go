@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/wk-y/rama-swap/microservices/scheduling"
-	"github.com/wk-y/rama-swap/tracker"
+	"github.com/rmcluster/backend/microservices/scheduling"
+	"github.com/rmcluster/backend/tracker"
 )
 
 type SchedulerSubscriber struct {
