@@ -32,6 +32,11 @@ paths:
           required: false
           schema:
             type: string
+        - name: nickname
+          in: query
+          required: false
+          schema:
+            type: string
       responses:
         200:
           description: "Successful announce"
@@ -75,6 +80,8 @@ paths:
                         storage_port:
                           type: integer
                         last_seen:
+                          type: string
+                        nickname:
                           type: string
                         hardware_model:
                           type: string
