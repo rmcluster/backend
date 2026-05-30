@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
 )
 
 // ---- API types ----
@@ -75,6 +74,14 @@ type connectInfoResponse struct {
 	Token                 string `json:"token"`
 	ConnectURI            string `json:"connect_uri"`
 	TokenExpiresInSeconds int    `json:"token_expires_in_seconds"`
+}
+
+type parallelismTargetResponse struct {
+	ParallelismTarget int `json:"parallelism_target"`
+}
+
+type parallelismTargetRequest struct {
+	ParallelismTarget int `json:"parallelism_target"`
 }
 
 // ---- Chat session types ----
@@ -659,6 +666,36 @@ func (s *UIApi) handleLoadingStatus(w http.ResponseWriter, r *http.Request) {
 	resp.NodeCount = len(s.tracker.GetServers())
 
 	writeAPIJSON(w, http.StatusOK, resp)
+}
+
+func (s *UIApi) handleParallelismTarget(w http.ResponseWriter, r *http.Request) {
+	if s.scheduler == nil {
+		writeAPIError(w, http.StatusNotImplemented, "scheduler controls unavailable")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		writeAPIJSON(w, http.StatusOK, parallelismTargetResponse{
+			ParallelismTarget: s.scheduler.GetParallelismTarget(),
+		})
+	case http.MethodPost:
+		var req parallelismTargetRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.ParallelismTarget < 1 {
+			writeAPIError(w, http.StatusBadRequest, "parallelism_target must be 1 or more")
+			return
+		}
+		s.scheduler.SetParallelismTarget(req.ParallelismTarget)
+		writeAPIJSON(w, http.StatusOK, parallelismTargetResponse{
+			ParallelismTarget: s.scheduler.GetParallelismTarget(),
+		})
+	default:
+		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
 }
 
 func (s *UIApi) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {
