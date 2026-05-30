@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -44,6 +45,7 @@ type RpcServerInfo struct {
 	Port          int       `json:"port"`
 	StoragePort   int       `json:"storage_port"`
 	LastSeen      time.Time `json:"last_seen"`
+	Nickname      string    `json:"nickname,omitempty"`
 	HardwareModel string    `json:"hardware_model"` // the hardware's model name
 	MaxSize       int64     `json:"max_size"`
 	Battery       float64   `json:"battery"`
@@ -96,6 +98,7 @@ func (t *Tracker) Announce(c *gin.Context) {
 	}
 
 	hardwareModel := c.Query("model")
+	nickname := strings.TrimSpace(c.Query("nickname"))
 
 	var maxSize int64 = -1
 	if maxSizeStr, ok := c.GetQuery("max_size"); ok {
@@ -135,6 +138,7 @@ func (t *Tracker) Announce(c *gin.Context) {
 		Ip:            ip,
 		Port:          portNum,
 		StoragePort:   storagePort,
+		Nickname:      nickname,
 		HardwareModel: hardwareModel,
 		MaxSize:       maxSize,
 		Battery:       battery,

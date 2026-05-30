@@ -425,6 +425,9 @@ components:
           format: ipv4
         port:
           type: integer
+        nickname:
+          type: string
+          nullable: true
         hardware_model:
           type: string
         max_size:
