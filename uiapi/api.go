@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
 )
 
 // ---- API types ----
@@ -59,6 +58,7 @@ type dashboardServerSnapshot struct {
 	Id            string   `json:"id"`
 	Ip            string   `json:"ip"`
 	Port          int      `json:"port"`
+	Nickname      string   `json:"nickname,omitempty"`
 	HardwareModel string   `json:"hardware_model"`
 	MaxSize       *int64   `json:"max_size"`
 	Battery       *float64 `json:"battery"`
@@ -680,6 +680,7 @@ func (s *UIApi) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {
 			Id:            server.Id,
 			Ip:            server.Ip,
 			Port:          server.Port,
+			Nickname:      server.Nickname,
 			HardwareModel: server.HardwareModel,
 		}
 		if server.MaxSize >= 0 {
