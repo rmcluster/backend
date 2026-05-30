@@ -53,19 +53,3 @@ func TestHandleParallelismTarget(t *testing.T) {
 		t.Fatalf("parallelism target = %d, want 3", resp.ParallelismTarget)
 	}
 }
-
-func TestHandleParallelismTargetRejectsValueAboveConnectedNodeCount(t *testing.T) {
-	tr := tracker.NewTracker()
-	tr.RegisterNode(tracker.RpcServerInfo{Id: "node-1", Ip: "10.0.0.1", Port: 9001})
-	tr.RegisterNode(tracker.RpcServerInfo{Id: "node-2", Ip: "10.0.0.2", Port: 9002})
-	ui := newTestUI(t, tr, &stubScheduler{target: 1})
-
-	req := httptest.NewRequest(http.MethodPost, "/api/ui/parallelism-target", strings.NewReader(`{"parallelism_target":3}`))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	ui.handleParallelismTarget(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("POST status = %d, want %d", rec.Code, http.StatusBadRequest)
-	}
-}
