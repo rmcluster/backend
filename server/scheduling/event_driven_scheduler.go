@@ -81,7 +81,6 @@ func NewEventDrivenScheduler(instanceFactory InstanceFactory, parallelismTarget 
 	return scheduler
 }
 
-
 // OnNewTask implements [Scheduler].
 func (s *EventDrivenScheduler) OnNewTask(task Task) {
 	log.Printf("EventDrivenScheduler: received task for model %s", task.Model())
