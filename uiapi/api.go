@@ -371,6 +371,16 @@ func (s *UIApi) consumeConnectToken(token string) bool {
 // ---- Network utilities ----
 
 func preferredConnectHostPort(r *http.Request) (string, int) {
+	if forwarded := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Host"), ",")[0]); forwarded != "" {
+		if host, _, err := net.SplitHostPort(forwarded); err == nil {
+			forwarded = host
+		}
+		forwarded = strings.Trim(forwarded, "[]")
+		if forwarded != "" {
+			return preferredConnectHost(forwarded), 4917
+		}
+	}
+
 	host := strings.TrimSpace(r.Host)
 	port := 4917
 
@@ -387,15 +397,17 @@ func preferredConnectHostPort(r *http.Request) (string, int) {
 		host = "localhost"
 	}
 
+	return preferredConnectHost(host), port
+}
+
+func preferredConnectHost(host string) string {
 	if !isLoopbackHost(host) {
-		return host, port
+		return host
 	}
-
 	if lanIP, ok := firstNonLoopbackIPv4(); ok {
-		return lanIP, port
+		return lanIP
 	}
-
-	return host, port
+	return host
 }
 
 func isLoopbackHost(host string) bool {
