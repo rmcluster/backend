@@ -70,6 +70,8 @@ func (d scheduleDecision) taskAge() string {
 	return time.Since(d.task.timestamp).Truncate(time.Millisecond).String()
 }
 
+const DefaultMemoryTargetBytes int64 = 1 << 30
+
 type EventDrivenScheduler struct {
 	instanceFactory   InstanceFactory
 	modelQueues       map[string][]*pendingTask
@@ -82,12 +84,15 @@ type EventDrivenScheduler struct {
 	taskCancelledChan chan Task
 	taskCompletedChan chan taskCompletionMessage
 	instanceDeadChan  chan instanceState
-	parallelismTarget int
+	memoryTargetBytes int64
 	idleBias          time.Duration
 }
 
 // NewEventDrivenScheduler constructs a new scheduler that decides one action per event.
-func NewEventDrivenScheduler(instanceFactory InstanceFactory, parallelismTarget int) *EventDrivenScheduler {
+func NewEventDrivenScheduler(instanceFactory InstanceFactory, memoryTargetBytes int64) *EventDrivenScheduler {
+	if memoryTargetBytes <= 0 {
+		memoryTargetBytes = DefaultMemoryTargetBytes
+	}
 	scheduler := &EventDrivenScheduler{
 		instanceFactory:   instanceFactory,
 		modelQueues:       make(map[string][]*pendingTask),
@@ -100,7 +105,7 @@ func NewEventDrivenScheduler(instanceFactory InstanceFactory, parallelismTarget 
 		taskCancelledChan: make(chan Task, 16),
 		taskCompletedChan: make(chan taskCompletionMessage, 16),
 		instanceDeadChan:  make(chan instanceState, 16),
-		parallelismTarget: parallelismTarget,
+		memoryTargetBytes: memoryTargetBytes,
 		idleBias:          10 * time.Second,
 	}
 	go scheduler.run()
@@ -282,50 +287,47 @@ func (s *EventDrivenScheduler) pickIdleInstanceFor(model string) *instanceState 
 }
 
 func (s *EventDrivenScheduler) pickNodesForNewInstance() ([]Node, bool) {
+	target := s.memoryTargetBytes
+	if target <= 0 {
+		target = DefaultMemoryTargetBytes
+	}
+
 	available := make([]Node, 0, len(s.unallocatedNodes))
 	for _, node := range s.unallocatedNodes {
 		available = append(available, node)
 	}
 	sort.Slice(available, func(i, j int) bool {
-		return available[i].Id() < available[j].Id()
+		return available[i].MaxSize() > available[j].MaxSize()
 	})
 
-	selected := make([]Node, 0, s.parallelismTarget)
+	selected := make([]Node, 0, len(available))
+	total := int64(0)
 	for _, node := range available {
 		selected = append(selected, node)
-		if len(selected) == s.parallelismTarget {
+		total += node.MaxSize()
+		if total >= target {
 			return selected, true
 		}
 	}
 
-	if len(selected) == s.parallelismTarget {
-		return selected, true
-	}
-
-	idleInstances := s.collectIdleInstancesSortedBySize()
+	idleInstances := s.collectIdleInstancesSortedByKillCost()
 	for _, inst := range idleInstances {
 		if !s.checkInstanceNodesStillOk(inst) {
 			continue
 		}
 		for _, node := range inst.usedNodes {
-			if len(selected) == s.parallelismTarget {
-				return selected, true
-			}
 			selected = append(selected, node)
+			total += node.MaxSize()
 		}
-		if len(selected) == s.parallelismTarget {
+		if total >= target {
 			return selected, true
 		}
 	}
 
-	if len(selected) == 0 {
-		return nil, false
-	}
-
-	return selected, true
+	return nil, false
 }
 
-func (s *EventDrivenScheduler) collectIdleInstancesSortedBySize() []instanceState {
+func (s *EventDrivenScheduler) collectIdleInstancesSortedByKillCost() []instanceState {
 	instances := make([]instanceState, 0)
 	for _, queue := range s.idleInstances {
 		for _, inst := range queue {
@@ -333,9 +335,20 @@ func (s *EventDrivenScheduler) collectIdleInstancesSortedBySize() []instanceStat
 		}
 	}
 	sort.Slice(instances, func(i, j int) bool {
-		return len(instances[i].usedNodes) < len(instances[j].usedNodes)
+		if len(instances[i].usedNodes) != len(instances[j].usedNodes) {
+			return len(instances[i].usedNodes) < len(instances[j].usedNodes)
+		}
+		return instanceTotalMemory(instances[i]) < instanceTotalMemory(instances[j])
 	})
 	return instances
+}
+
+func instanceTotalMemory(info instanceState) int64 {
+	total := int64(0)
+	for _, node := range info.usedNodes {
+		total += node.MaxSize()
+	}
+	return total
 }
 
 func (s *EventDrivenScheduler) executeReuseDecision(decision scheduleDecision) {
