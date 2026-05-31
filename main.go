@@ -121,7 +121,7 @@ func main() {
 		setter.SetPhaseCallback(loadingTracker.OnPhaseUpdate)
 		setter.SetLayersCallback(loadingTracker.OnLayersKnown)
 	}
-	scheduler := scheduling.NewPartitioningScheduler(factory, 3)
+	scheduler := scheduling.NewPartitioningScheduler(factory, 0)
 	tracker.DefaultTracker.Subscribe(schedulersubscriber.NewSchedulerSubscriber(scheduler))
 	cas := gcas.NewGCAS(gcasdb)
 	tracker.DefaultTracker.Subscribe(gcassubscriber.NewGCASSubscriber(cas))

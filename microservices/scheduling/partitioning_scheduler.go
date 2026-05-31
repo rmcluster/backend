@@ -1,8 +1,11 @@
 package scheduling
 
 import (
+	"fmt"
 	"log"
 	"math"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -23,7 +26,6 @@ type instanceInfo struct {
 	usedNodes []Node
 }
 
-
 type TaskCompletionMessage struct {
 	instanceInfo
 	task Task
@@ -33,6 +35,8 @@ type NodeAllocationInfo struct {
 	instance Instance
 	node     Node
 }
+
+const defaultNodeMemoryUtilization = 0.9
 
 func NewPartitioningScheduler(instanceFactory InstanceFactory, parallelismTarget int) *PartitioningScheduler {
 	scheduler := &PartitioningScheduler{
@@ -184,7 +188,9 @@ taskHandlerLoop:
 		}
 
 		// can we create a new instance?
-		if len(s.unallocatedNodes) == 0 {
+		requiredNodeCount := s.requiredNodeCount(task.Model())
+
+		if len(s.unallocatedNodes) < requiredNodeCount {
 			// can we kill any idle instances?
 		killLoop:
 			for _, instances := range s.idleInstances {
@@ -198,14 +204,14 @@ taskHandlerLoop:
 						}
 					}
 
-					if len(s.unallocatedNodes) >= s.parallelismTarget {
+					if len(s.unallocatedNodes) >= requiredNodeCount {
 						break killLoop
 					}
 				}
 			}
 		}
 
-		for len(s.unallocatedNodes) == 0 {
+		for len(s.unallocatedNodes) < requiredNodeCount {
 			select {
 			case nodeEvent := <-s.nodeEventChan:
 				s.handleNodeEvent(nodeEvent)
@@ -229,17 +235,18 @@ taskHandlerLoop:
 					s.killInstance(completion.instanceInfo)
 				}
 			}
+			requiredNodeCount = s.requiredNodeCount(task.Model())
 		}
 
 		// create new instance
-		nodes := []Node{}
-		for _, node := range s.unallocatedNodes {
-			nodes = append(nodes, node)
-			if len(nodes) == s.parallelismTarget {
-				break
-			}
+		nodes := s.selectNodes(task.Model())
+		if err := s.checkModelFitsOnNodes(task.Model(), nodes); err != nil {
+			log.Printf("PartitioningScheduler: refusing to start model %s: %v", task.Model(), err)
+			task.Fail(err)
+			continue
 		}
 
+		s.logNodeSelection(task.Model(), nodes)
 		log.Printf("PartitioningScheduler: starting model %s with %d nodes", task.Model(), len(nodes))
 
 		instance, err := s.instanceFactory.StartInstance(task.Model(), nodes)
@@ -367,6 +374,166 @@ func (s *PartitioningScheduler) scoreTask(task *timestampedTask, now time.Time) 
 	}
 
 	return score
+}
+
+func (s *PartitioningScheduler) availableNodesSorted() []Node {
+	nodes := make([]Node, 0, len(s.unallocatedNodes))
+	for _, node := range s.unallocatedNodes {
+		nodes = append(nodes, node)
+	}
+	sort.Slice(nodes, func(i, j int) bool {
+		if nodes[i].MaxSize() == nodes[j].MaxSize() {
+			return nodes[i].Id() < nodes[j].Id()
+		}
+		return nodes[i].MaxSize() > nodes[j].MaxSize()
+	})
+	return nodes
+}
+
+func (s *PartitioningScheduler) requiredNodeCount(model string) int {
+	nodes := s.availableNodesSorted()
+	if len(nodes) == 0 {
+		return 0
+	}
+	if s.parallelismTarget > 0 {
+		//defer to parallelism target
+		if s.parallelismTarget > len(nodes) {
+			return len(nodes)
+		}
+		return s.parallelismTarget
+	}
+
+	modelSizer, ok := s.instanceFactory.(ModelSizer)
+	if !ok {
+		return len(nodes)
+	}
+	modelBytes, err := modelSizer.ModelSizeBytes(model)
+	if err != nil || modelBytes <= 0 {
+		log.Printf("PartitioningScheduler: auto node count unavailable for %s: %v", model, err)
+		return len(nodes)
+	}
+	return requiredNodeCountForModelBytes(modelBytes, nodes, defaultNodeMemoryUtilization)
+}
+
+func (s *PartitioningScheduler) selectNodes(model string) []Node {
+	nodes := s.availableNodesSorted()
+	required := s.requiredNodeCount(model)
+	if required <= 0 || required > len(nodes) {
+		required = len(nodes)
+	}
+
+	if s.parallelismTarget == 0 && required == 1 {
+		if modelSizer, ok := s.instanceFactory.(ModelSizer); ok {
+			modelBytes, err := modelSizer.ModelSizeBytes(model)
+			if err == nil && modelBytes > 0 {
+				if node, ok := smallestSufficientNode(modelBytes, nodes, defaultNodeMemoryUtilization); ok {
+					return []Node{node}
+				}
+			}
+		}
+	}
+
+	return append([]Node(nil), nodes[:required]...)
+}
+
+func requiredNodeCountForModelBytes(modelBytes int64, nodes []Node, utilization float64) int {
+	if len(nodes) == 0 {
+		return 0
+	}
+	if modelBytes <= 0 || utilization <= 0 {
+		return len(nodes)
+	}
+
+	var totalUsable int64
+	for idx, node := range nodes {
+		// Keep node-count selection aligned with tensor-split budgeting: each
+		// phone contributes only floor(utilization * max_capacity).
+		usable := usableNodeCapacity(node.MaxSize(), utilization)
+		if usable < 0 {
+			usable = 0
+		}
+		totalUsable += usable
+		if totalUsable >= modelBytes {
+			return idx + 1
+		}
+	}
+
+	return len(nodes)
+}
+
+func (s *PartitioningScheduler) checkModelFitsOnNodes(model string, nodes []Node) error {
+	modelSizer, ok := s.instanceFactory.(ModelSizer)
+	if !ok {
+		return nil
+	}
+	modelBytes, err := modelSizer.ModelSizeBytes(model)
+	if err != nil || modelBytes <= 0 {
+		return nil
+	}
+	totalCapacity := totalNodeCapacity(nodes)
+	if totalCapacity < modelBytes {
+		return fmt.Errorf("model size %d exceeds selected node capacity %d", modelBytes, totalCapacity)
+	}
+	return nil
+}
+
+func smallestSufficientNode(modelBytes int64, nodes []Node, utilization float64) (Node, bool) {
+	bestIdx := -1
+	bestUsable := int64(0)
+	for i, node := range nodes {
+		usable := usableNodeCapacity(node.MaxSize(), utilization)
+		if usable < modelBytes {
+			continue
+		}
+		if bestIdx < 0 || usable < bestUsable || (usable == bestUsable && node.Id() < nodes[bestIdx].Id()) {
+			bestIdx = i
+			bestUsable = usable
+		}
+	}
+	if bestIdx < 0 {
+		return nil, false
+	}
+	return nodes[bestIdx], true
+}
+
+func usableNodeCapacity(maxSize int64, utilization float64) int64 {
+	return int64(float64(maxSize) * utilization)
+}
+
+func totalNodeCapacity(nodes []Node) int64 {
+	var total int64
+	for _, node := range nodes {
+		if node.MaxSize() > 0 {
+			total += node.MaxSize()
+		}
+	}
+	return total
+}
+
+func (s *PartitioningScheduler) logNodeSelection(model string, nodes []Node) {
+	modelBytes := int64(0)
+	if modelSizer, ok := s.instanceFactory.(ModelSizer); ok {
+		if size, err := modelSizer.ModelSizeBytes(model); err == nil {
+			modelBytes = size
+		}
+	}
+
+	nodeIDs := make([]string, 0, len(nodes))
+	usableCapacity := int64(0)
+	for _, node := range nodes {
+		nodeIDs = append(nodeIDs, node.Id())
+		usableCapacity += usableNodeCapacity(node.MaxSize(), defaultNodeMemoryUtilization)
+	}
+
+	log.Printf(
+		"PartitioningScheduler: model %s selected nodes [%s] raw_capacity=%d usable_capacity=%d model_bytes=%d parallelism_target=%d",
+		model,
+		strings.Join(nodeIDs, ","),
+		totalNodeCapacity(nodes),
+		usableCapacity,
+		modelBytes,
+		s.parallelismTarget,
+	)
 }
 
 var _ Scheduler = (*PartitioningScheduler)(nil)

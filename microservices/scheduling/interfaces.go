@@ -20,6 +20,10 @@ type InstanceFactory interface {
 	StartInstance(model string, nodes []Node) (Instance, error)
 }
 
+type ModelSizer interface {
+	ModelSizeBytes(model string) (int64, error)
+}
+
 type Node interface {
 	Id() string
 	Ip() string

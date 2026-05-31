@@ -3,6 +3,7 @@ package llama
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"slices"
 )
@@ -52,4 +53,16 @@ func (r Llama) Inspect(name string) (InspectInfo, error) {
 	}
 
 	return info, nil
+}
+
+func (r Llama) ModelSizeBytes(name string) (int64, error) {
+	info, err := r.Inspect(name)
+	if err != nil {
+		return 0, err
+	}
+	stat, err := os.Stat(info.Path)
+	if err != nil {
+		return 0, err
+	}
+	return stat.Size(), nil
 }

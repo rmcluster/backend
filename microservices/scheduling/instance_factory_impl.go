@@ -21,6 +21,10 @@ func NewInstanceFactory(llmService *llama.Llama, lowestPort int) InstanceFactory
 	}
 }
 
+func (i *instanceFactoryImpl) ModelSizeBytes(model string) (int64, error) {
+	return i.llmService.ModelSizeBytes(model)
+}
+
 type instanceFactoryImpl struct {
 	sync.Mutex
 	llmService     *llama.Llama
@@ -57,8 +61,9 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 	rpcNodes := make([]llama.RpcNode, len(nodes))
 	for idx, node := range nodes {
 		rpcNodes[idx] = llama.RpcNode{
-			Ip:   node.Ip(),
-			Port: node.Port(),
+			Ip:      node.Ip(),
+			Port:    node.Port(),
+			MaxSize: node.MaxSize(),
 		}
 	}
 
