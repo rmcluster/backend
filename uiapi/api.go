@@ -371,6 +371,10 @@ func (s *UIApi) consumeConnectToken(token string) bool {
 // ---- Network utilities ----
 
 func preferredConnectHostPort(r *http.Request) (string, int) {
+	if host := strings.TrimSpace(os.Getenv("RMD_CONNECT_HOST")); host != "" {
+		return strings.Trim(host, "[]"), 4917
+	}
+
 	if forwarded := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Host"), ",")[0]); forwarded != "" {
 		if host, _, err := net.SplitHostPort(forwarded); err == nil {
 			forwarded = host
@@ -411,7 +415,7 @@ func preferredConnectHost(host string) string {
 }
 
 func isLoopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
+	if strings.EqualFold(host, "localhost") || strings.EqualFold(host, "host.docker.internal") {
 		return true
 	}
 	ip := net.ParseIP(host)
@@ -426,6 +430,9 @@ func firstNonLoopbackIPv4() (string, bool) {
 
 	for _, iface := range ifaces {
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if strings.HasPrefix(iface.Name, "docker") || strings.HasPrefix(iface.Name, "br-") || strings.HasPrefix(iface.Name, "veth") {
 			continue
 		}
 
