@@ -3,9 +3,12 @@ package scheduling
 import (
 	"log"
 	"math"
+	"os"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/rmcluster/backend/llama"
 )
 
 type pendingTask struct {
@@ -70,43 +73,50 @@ func (d scheduleDecision) taskAge() string {
 	return time.Since(d.task.timestamp).Truncate(time.Millisecond).String()
 }
 
-const DefaultMemoryTargetBytes int64 = 1 << 30
+const (
+	DefaultMemoryTargetMultiplier       = 1.0
+	DefaultMemoryTargetBytes      int64 = 1 << 30
+)
 
 type EventDrivenScheduler struct {
-	instanceFactory   InstanceFactory
-	modelQueues       map[string][]*pendingTask
-	unallocatedNodes  map[string]Node
-	allocatedNodes    map[string]NodeAllocationInfo
-	idleInstances     map[string][]instanceState
-	activeInstances   map[Instance]instanceState
-	newTasksChan      chan Task
-	nodeEventChan     chan NodeEvent
-	taskCancelledChan chan Task
-	taskCompletedChan chan taskCompletionMessage
-	instanceDeadChan  chan instanceState
-	memoryTargetBytes int64
-	idleBias          time.Duration
+	instanceFactory        InstanceFactory
+	llmService             llama.Llama
+	modelQueues            map[string][]*pendingTask
+	unallocatedNodes       map[string]Node
+	allocatedNodes         map[string]NodeAllocationInfo
+	idleInstances          map[string][]instanceState
+	activeInstances        map[Instance]instanceState
+	newTasksChan           chan Task
+	nodeEventChan          chan NodeEvent
+	taskCancelledChan      chan Task
+	taskCompletedChan      chan taskCompletionMessage
+	instanceDeadChan       chan instanceState
+	memoryTargetMultiplier float64
+	modelSizeCache         map[string]int64
+	idleBias               time.Duration
 }
 
 // NewEventDrivenScheduler constructs a new scheduler that decides one action per event.
-func NewEventDrivenScheduler(instanceFactory InstanceFactory, memoryTargetBytes int64) *EventDrivenScheduler {
-	if memoryTargetBytes <= 0 {
-		memoryTargetBytes = DefaultMemoryTargetBytes
+func NewEventDrivenScheduler(instanceFactory InstanceFactory, llmService llama.Llama, memoryTargetMultiplier float64) *EventDrivenScheduler {
+	if memoryTargetMultiplier <= 0 {
+		memoryTargetMultiplier = DefaultMemoryTargetMultiplier
 	}
 	scheduler := &EventDrivenScheduler{
-		instanceFactory:   instanceFactory,
-		modelQueues:       make(map[string][]*pendingTask),
-		unallocatedNodes:  make(map[string]Node),
-		allocatedNodes:    make(map[string]NodeAllocationInfo),
-		idleInstances:     make(map[string][]instanceState),
-		activeInstances:   make(map[Instance]instanceState),
-		newTasksChan:      make(chan Task, 16),
-		nodeEventChan:     make(chan NodeEvent, 16),
-		taskCancelledChan: make(chan Task, 16),
-		taskCompletedChan: make(chan taskCompletionMessage, 16),
-		instanceDeadChan:  make(chan instanceState, 16),
-		memoryTargetBytes: memoryTargetBytes,
-		idleBias:          10 * time.Second,
+		instanceFactory:        instanceFactory,
+		llmService:             llmService,
+		modelQueues:            make(map[string][]*pendingTask),
+		unallocatedNodes:       make(map[string]Node),
+		allocatedNodes:         make(map[string]NodeAllocationInfo),
+		idleInstances:          make(map[string][]instanceState),
+		activeInstances:        make(map[Instance]instanceState),
+		newTasksChan:           make(chan Task, 16),
+		nodeEventChan:          make(chan NodeEvent, 16),
+		taskCancelledChan:      make(chan Task, 16),
+		taskCompletedChan:      make(chan taskCompletionMessage, 16),
+		instanceDeadChan:       make(chan instanceState, 16),
+		memoryTargetMultiplier: memoryTargetMultiplier,
+		modelSizeCache:         make(map[string]int64),
+		idleBias:               10 * time.Second,
 	}
 	go scheduler.run()
 	return scheduler
@@ -247,7 +257,7 @@ func (s *EventDrivenScheduler) decideAction() scheduleDecision {
 		}
 	}
 
-	if nodes, ok := s.pickNodesForNewInstance(); ok {
+	if nodes, ok := s.pickNodesForNewInstance(bestModel); ok {
 		return scheduleDecision{
 			kind:  decisionCreateNewInstance,
 			task:  bestTask,
@@ -286,11 +296,8 @@ func (s *EventDrivenScheduler) pickIdleInstanceFor(model string) *instanceState 
 	return nil
 }
 
-func (s *EventDrivenScheduler) pickNodesForNewInstance() ([]Node, bool) {
-	target := s.memoryTargetBytes
-	if target <= 0 {
-		target = DefaultMemoryTargetBytes
-	}
+func (s *EventDrivenScheduler) pickNodesForNewInstance(model string) ([]Node, bool) {
+	target := s.memoryTargetForModel(model)
 
 	available := make([]Node, 0, len(s.unallocatedNodes))
 	for _, node := range s.unallocatedNodes {
@@ -325,6 +332,39 @@ func (s *EventDrivenScheduler) pickNodesForNewInstance() ([]Node, bool) {
 	}
 
 	return nil, false
+}
+
+func (s *EventDrivenScheduler) memoryTargetForModel(model string) int64 {
+	modelSize := s.cachedModelSize(model)
+	if modelSize <= 0 {
+		return DefaultMemoryTargetBytes
+	}
+	target := int64(float64(modelSize) * s.memoryTargetMultiplier)
+	if target <= 0 {
+		return DefaultMemoryTargetBytes
+	}
+	return target
+}
+
+func (s *EventDrivenScheduler) cachedModelSize(model string) int64 {
+	if size, ok := s.modelSizeCache[model]; ok {
+		return size
+	}
+	size := s.loadModelSize(model)
+	s.modelSizeCache[model] = size
+	return size
+}
+
+func (s *EventDrivenScheduler) loadModelSize(model string) int64 {
+	info, err := s.llmService.Inspect(model)
+	if err != nil || info.Path == "" {
+		return 0
+	}
+	fi, err := os.Stat(info.Path)
+	if err != nil {
+		return 0
+	}
+	return fi.Size()
 }
 
 func (s *EventDrivenScheduler) collectIdleInstancesSortedByKillCost() []instanceState {
