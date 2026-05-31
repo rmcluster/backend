@@ -4,6 +4,7 @@ import (
 	"log"
 	"math"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -37,11 +38,36 @@ const (
 	decisionCreateNewInstance
 )
 
+func (k decisionKind) String() string {
+	switch k {
+	case decisionReuseIdleInstance:
+		return "reuse-idle-instance"
+	case decisionCreateNewInstance:
+		return "create-new-instance"
+	default:
+		return "none"
+	}
+}
+
 type scheduleDecision struct {
 	kind     decisionKind
 	task     *pendingTask
 	instance instanceState
 	nodes    []Node
+}
+
+func (d scheduleDecision) taskSummary() string {
+	if d.task == nil {
+		return "-"
+	}
+	return d.task.task.Model()
+}
+
+func (d scheduleDecision) taskAge() string {
+	if d.task == nil {
+		return "-"
+	}
+	return time.Since(d.task.timestamp).Truncate(time.Millisecond).String()
 }
 
 type EventDrivenScheduler struct {
@@ -102,11 +128,53 @@ func (s *EventDrivenScheduler) OnTaskCancelled(task Task) {
 	s.taskCancelledChan <- task
 }
 
+func (s *EventDrivenScheduler) totalQueuedTasks() int {
+	total := 0
+	for _, queue := range s.modelQueues {
+		total += len(queue)
+	}
+	return total
+}
+
+func (s *EventDrivenScheduler) totalIdleInstances() int {
+	total := 0
+	for _, instances := range s.idleInstances {
+		total += len(instances)
+	}
+	return total
+}
+
+func (s *EventDrivenScheduler) totalActiveInstances() int {
+	return len(s.activeInstances)
+}
+
+func nodeList(nodes []Node) string {
+	if len(nodes) == 0 {
+		return "[]"
+	}
+	ids := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		ids = append(ids, node.Id())
+	}
+	return "[" + strings.Join(ids, ",") + "]"
+}
+
 func (s *EventDrivenScheduler) run() {
 	for {
 		s.processEvents()
 
 		decision := s.decideAction()
+		log.Printf("EventDrivenScheduler: decision=%s model=%s taskAge=%s queue=%d unallocated=%d idle=%d active=%d nodes=%s",
+			decision.kind.String(),
+			decision.taskSummary(),
+			decision.taskAge(),
+			s.totalQueuedTasks(),
+			len(s.unallocatedNodes),
+			s.totalIdleInstances(),
+			s.totalActiveInstances(),
+			nodeList(decision.nodes),
+		)
+
 		switch decision.kind {
 		case decisionReuseIdleInstance:
 			s.executeReuseDecision(decision)
