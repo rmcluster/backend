@@ -172,8 +172,11 @@ func (f *fakeCAS) FreeSpace(_ context.Context) (int64, error) { return 1 << 30, 
 // Wrap fakeCAS as a GCAS for the constructor (AddNode/RemoveNode are no-ops).
 type fakeGCAS struct{ *fakeCAS }
 
-func (f *fakeGCAS) AddNode(_ gcas.NamedCAS)    {}
-func (f *fakeGCAS) RemoveNode(_ gcas.NamedCAS) {}
+func (f *fakeGCAS) AddNode(_ gcas.NamedCAS)                {}
+func (f *fakeGCAS) RemoveNode(_ string)                    {}
+func (f *fakeGCAS) ReplaceNode(_ gcas.NamedCAS)            {}
+func (f *fakeGCAS) RunMaintenance(_ context.Context) error { return nil }
+func (f *fakeGCAS) Repair(_ context.Context) error         { return nil }
 
 func TestOpenFileRead(t *testing.T) {
 	ctx := context.Background()
