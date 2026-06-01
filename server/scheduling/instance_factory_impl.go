@@ -79,6 +79,7 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 		dead:  dead,
 		port:  port,
 		model: model,
+		nodes: nodes,
 	}
 
 	// phaseCb will update the instance state and forward to factory callback.

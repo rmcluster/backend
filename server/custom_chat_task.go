@@ -28,6 +28,27 @@ type customChatTokenEvent struct {
 	Token string `json:"token"`
 }
 
+type customChatNodesEvent struct {
+	Type  string       `json:"type"`
+	Nodes []nodeJsoner `json:"nodes"`
+}
+
+type nodeJsoner struct {
+	node scheduling.Node
+}
+
+var _ json.Marshaler = nodeJsoner{}
+
+func (n nodeJsoner) MarshalJSON() ([]byte, error) {
+	// id is not included, because the real id isn't in the scheduler's Node interface,
+	// and in any case would allow for impersonating nodes
+	return json.Marshal(map[string]any{
+		"ip":       n.node.Ip(),
+		"port":     n.node.Port(),
+		"max_size": n.node.MaxSize(),
+	})
+}
+
 func newCustomChatTask(model string, w http.ResponseWriter, r *http.Request) *customChatTask {
 	return &customChatTask{
 		model: model,
@@ -116,12 +137,31 @@ func (p *customChatTask) PerformInference(instance scheduling.Instance) (err err
 		return nil
 	}
 
+	// send initial nodes event
+	err = sendEvent(customChatNodesEvent{
+		Type: "nodes",
+		Nodes: func() []nodeJsoner {
+			nodes := instance.GetUsedNodes()
+			jsoners := make([]nodeJsoner, len(nodes))
+			for i, node := range nodes {
+				jsoners[i] = nodeJsoner{node: node}
+			}
+			return jsoners
+		}(),
+	})
+	if err != nil {
+		log.Printf("Failed to send initial nodes event: %v", err)
+	}
+
 	// send a status event for the start of the completion
-	sendEvent(customChatStatusEvent{
+	err = sendEvent(customChatStatusEvent{
 		Type:       "status",
 		Phase:      "started",
 		Percentage: 0,
 	})
+	if err != nil {
+		log.Printf("Failed to send initial status event: %v", err)
+	}
 
 	var routinesDone sync.WaitGroup
 	routinesDone.Add(1)
