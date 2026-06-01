@@ -38,6 +38,7 @@ func (s *Server) HandleHttp(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/models", s.handleModels)
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
 	mux.HandleFunc("POST /v1/completions", s.handleCompletions)
+	mux.HandleFunc("POST /v1/custom_chat/completions", s.handleCustomChatCompletions)
 
 	// llama-swap style endpoint
 	mux.HandleFunc("/upstream/{model}/{rest...}", s.serveUpstream)
@@ -135,4 +136,47 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("Failed to reply: %v\n", err)
 	}
+}
+
+func (s *Server) handleCustomChatCompletions(w http.ResponseWriter, r *http.Request) {
+	var decoderRead bytes.Buffer
+	tee := io.TeeReader(r.Body, &decoderRead)
+
+	modelFinder := func(body io.Reader) (model string, err error) {
+		var modelGet struct {
+			Model *string
+		}
+
+		err = json.NewDecoder(body).Decode(&modelGet)
+		if err != nil {
+			return
+		}
+
+		if modelGet.Model == nil {
+			return "", fmt.Errorf("missing model key")
+		}
+
+		log.Printf("Chat completion requested for model %s", *modelGet.Model)
+		return *modelGet.Model, nil
+	}
+
+	model, err := modelFinder(tee)
+
+	if err != nil {
+		log.Println("Failed to determine model for request:", err)
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("missing or invalid 'model' key"))
+		return
+	}
+
+	body := r.Body
+	r.Body = util.ReadCloserWrapper{
+		Reader: io.MultiReader(&decoderRead, body),
+		Closer: body.Close,
+	}
+
+	task := newCustomChatTask(model, w, r)
+	taskWithCompletion := newTaskWithCompletion(task)
+	s.scheduler.OnNewTask(taskWithCompletion)
+	<-taskWithCompletion.done
 }
