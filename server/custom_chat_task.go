@@ -46,6 +46,7 @@ func (n nodeJsoner) MarshalJSON() ([]byte, error) {
 		"ip":       n.node.Ip(),
 		"port":     n.node.Port(),
 		"max_size": n.node.MaxSize(),
+		"nickname": n.node.Nickname(),
 	})
 }
 
