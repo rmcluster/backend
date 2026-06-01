@@ -67,10 +67,11 @@ func (s *SchedulerSubscriber) OnNodeRemoved(trackerNode tracker.RpcServerInfo) {
 
 func convertTrackerNode(trackerNode tracker.RpcServerInfo) *node {
 	return &node{
-		id:      trackerNode.Ip + ":" + strconv.Itoa(trackerNode.Port),
-		ip:      trackerNode.Ip,
-		port:    trackerNode.Port,
-		maxSize: trackerNode.MaxSize,
+		id:       trackerNode.Ip + ":" + strconv.Itoa(trackerNode.Port),
+		ip:       trackerNode.Ip,
+		port:     trackerNode.Port,
+		maxSize:  trackerNode.MaxSize,
+		nickname: trackerNode.Nickname,
 	}
 }
 

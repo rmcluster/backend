@@ -27,6 +27,7 @@ type Node interface {
 	Ip() string
 	Port() int
 	MaxSize() int64
+	Nickname() string
 }
 
 type Task interface {
