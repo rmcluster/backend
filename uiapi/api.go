@@ -33,8 +33,14 @@ type apiModel struct {
 	SupportsThinking bool   `json:"supports_thinking"`
 }
 
+type apiCacheEntry struct {
+	Repo  string `json:"repo"`
+	Quant string `json:"quant"`
+}
+
 type apiModelsResponse struct {
-	Models []apiModel `json:"models"`
+	Models []apiModel      `json:"models"`
+	Cache  []apiCacheEntry `json:"cache"`
 }
 
 type apiSearchModel struct {
@@ -506,16 +512,23 @@ func (s *UIApi) handleAPIModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entries := s.listModelEntries()
+	writeAPIJSON(w, http.StatusOK, apiModelsResponse{
+		Models: s.buildAPIModels(s.listModelEntries()),
+		Cache:  s.listModelCache(),
+	})
+}
+
+func (s *UIApi) buildAPIModels(entries []modelEntry) []apiModel {
 	models := make([]apiModel, 0, len(entries))
+
 	for _, entry := range entries {
 		params := entry.Parameters
 		arch := entry.Architecture
 		quant := entry.Quantization
+		supportsThinking := false
 
-		if strings.HasPrefix(entry.Model, "hf:") && (params == "" || arch == "" || quant == "") {
-			repo, variant, ok := parseHFModelRef(entry.Model)
-			if ok {
+		if strings.HasPrefix(entry.Model, "hf:") {
+			if repo, variant, ok := parseHFModelRef(entry.Model); ok {
 				meta := fetchHFMetadata(repo, variant)
 				if params == "" {
 					params = meta.Parameters
@@ -526,13 +539,7 @@ func (s *UIApi) handleAPIModels(w http.ResponseWriter, r *http.Request) {
 				if quant == "" {
 					quant = meta.Quantization
 				}
-			}
-		}
-
-		supportsThinking := false
-		if strings.HasPrefix(entry.Model, "hf:") {
-			if repo, variant, ok := parseHFModelRef(entry.Model); ok {
-				supportsThinking = fetchHFMetadata(repo, variant).SupportsThinking
+				supportsThinking = meta.SupportsThinking
 			}
 		}
 
@@ -549,7 +556,7 @@ func (s *UIApi) handleAPIModels(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeAPIJSON(w, http.StatusOK, apiModelsResponse{Models: models})
+	return models
 }
 
 func (s *UIApi) handleAPISearchModels(w http.ResponseWriter, r *http.Request) {
@@ -613,6 +620,10 @@ func (s *UIApi) handleAPIAddHFModel(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := validateHFRepoHasGGUF(entry.Model); err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	if hfStore == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "metadata store unavailable")
@@ -623,13 +634,9 @@ func (s *UIApi) handleAPIAddHFModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeAPIJSON(w, http.StatusCreated, apiModel{
-		Model:       entry.Model,
-		DisplayName: entry.DisplayName,
-		Source:      entry.Source,
-		LinkHref:    entry.LinkHref,
-		LinkLabel:   entry.LinkLabel,
-	})
+	s.startPrefetch(entry.Model)
+
+	writeAPIJSON(w, http.StatusCreated, s.buildAPIModels([]modelEntry{customModelEntries([]customModelEntry{entry})[0]})[0])
 }
 
 func (s *UIApi) handleAPILocalModelUpload(w http.ResponseWriter, r *http.Request) {
@@ -673,16 +680,7 @@ func (s *UIApi) handleAPILocalModelUpload(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	writeAPIJSON(w, http.StatusCreated, apiModel{
-		Model:        entry.Model,
-		DisplayName:  entry.DisplayName,
-		Parameters:   entry.Parameters,
-		Architecture: entry.Architecture,
-		Quantization: entry.Quantization,
-		Source:       entry.Source,
-		LinkHref:     entry.LinkHref,
-		LinkLabel:    entry.LinkLabel,
-	})
+	writeAPIJSON(w, http.StatusCreated, s.buildAPIModels([]modelEntry{customModelEntries([]customModelEntry{entry})[0]})[0])
 }
 
 func (s *UIApi) handleLoadingStatus(w http.ResponseWriter, r *http.Request) {

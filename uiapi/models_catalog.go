@@ -47,7 +47,7 @@ func searchHFModels(query string, limit int) ([]hfSearchResult, error) {
 		limit = 12
 	}
 
-	endpoint := "https://huggingface.co/api/models?search=" + url.QueryEscape(q) + "&limit=" + strconv.Itoa(limit)
+	endpoint := "https://huggingface.co/api/models?search=" + url.QueryEscape(q) + "&filter=gguf&limit=" + strconv.Itoa(limit)
 	resp, err := hfSearchClient.Get(endpoint)
 	if err != nil {
 		return nil, err
@@ -83,4 +83,37 @@ func searchHFModels(query string, limit int) ([]hfSearchResult, error) {
 	}
 
 	return slices.Clip(filtered), nil
+}
+
+func validateHFRepoHasGGUF(modelRef string) error {
+	repo, _, ok := parseHFModelRef(modelRef)
+	if !ok || repo == "" {
+		return fmt.Errorf("invalid Hugging Face model reference")
+	}
+
+	resp, err := hfSearchClient.Get("https://huggingface.co/api/models/" + repo)
+	if err != nil {
+		return fmt.Errorf("failed to look up Hugging Face repository")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("repository not found on Hugging Face")
+	}
+
+	var item hfSearchResult
+	if err := json.NewDecoder(resp.Body).Decode(&item); err != nil {
+		return fmt.Errorf("failed to read Hugging Face repository metadata")
+	}
+
+	idLower := strings.ToLower(item.ID)
+	for _, tag := range item.Tags {
+		if strings.EqualFold(tag, "gguf") {
+			return nil
+		}
+	}
+	if strings.Contains(idLower, "gguf") {
+		return nil
+	}
+
+	return fmt.Errorf("repository has no GGUF files; search for a GGUF repo or pick a specific .gguf file")
 }
