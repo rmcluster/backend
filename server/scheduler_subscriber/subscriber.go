@@ -33,7 +33,7 @@ func (s *SchedulerSubscriber) OnNodeUpdated(node tracker.RpcServerInfo) {
 	oldNode := s.nodes[node.Id]
 	if oldNode == nil {
 		log.Printf("WARN: node %s not found in nodes", node.Id)
-		s.OnNodeAdded(node)
+		s.addNodeLocked(node)
 		return
 	}
 
@@ -49,6 +49,11 @@ func (s *SchedulerSubscriber) OnNodeUpdated(node tracker.RpcServerInfo) {
 func (s *SchedulerSubscriber) OnNodeAdded(trackerNode tracker.RpcServerInfo) {
 	s.nodesLock.Lock()
 	defer s.nodesLock.Unlock()
+	s.addNodeLocked(trackerNode)
+}
+
+// addNodeLocked adds a node without acquiring the lock. Assumes the caller holds the lock.
+func (s *SchedulerSubscriber) addNodeLocked(trackerNode tracker.RpcServerInfo) {
 	convertedNode := convertTrackerNode(trackerNode)
 	s.nodes[trackerNode.Id] = convertedNode
 
