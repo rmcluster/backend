@@ -705,8 +705,8 @@ func (s *UIApi) handleParallelismTarget(w http.ResponseWriter, r *http.Request) 
 			writeAPIError(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
-		if req.ParallelismTarget < 1 {
-			writeAPIError(w, http.StatusBadRequest, "parallelism_target must be 1 or more")
+		if req.ParallelismTarget < 0 {
+			writeAPIError(w, http.StatusBadRequest, "parallelism_target must be 0 or more")
 			return
 		}
 		s.scheduler.SetParallelismTarget(req.ParallelismTarget)
