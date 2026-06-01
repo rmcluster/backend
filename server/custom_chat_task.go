@@ -84,6 +84,8 @@ func (p *customChatTask) PerformInference(instance scheduling.Instance) (err err
 					messages[i] = openai.UserMessage(msg.Content)
 				case "assistant":
 					messages[i] = openai.AssistantMessage(msg.Content)
+				case "developer":
+					messages[i] = openai.DeveloperMessage(msg.Content)
 				default:
 					log.Printf("Unknown message role %s, treating as user", msg.Role)
 					messages[i] = openai.UserMessage(msg.Content)
