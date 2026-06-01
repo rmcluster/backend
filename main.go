@@ -162,7 +162,7 @@ func main() {
 	webdavService := webdavservice.NewWebDavService(storageSvc)
 	webdavService.RegisterGinHandlers(router)
 
-	conversationSvc := conversations.NewConversationsService(conversationDb, fmt.Sprintf("http://127.0.0.1:%d/api/v1", *args.Port))
+	conversationSvc := conversations.NewConversationsService(conversationDb, fmt.Sprintf("http://127.0.0.1:%d/v1", *args.Port))
 	server := server.NewServer(ramalama, scheduler, conversationSvc)
 
 	server.ModelNameMangler = func(s string) string {

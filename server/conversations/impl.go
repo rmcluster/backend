@@ -258,7 +258,8 @@ ORDER BY m.key ASC
 
 	var response *Response
 	for rows.Next() {
-		var rid, object, conversationID, model string
+		var rid, object, model string
+		var conversationID sql.NullString
 		var createdAt int64
 		var input sql.NullString
 		var output sql.NullString
@@ -269,12 +270,14 @@ ORDER BY m.key ASC
 		}
 		if response == nil {
 			response = &Response{
-				Id:           rid,
-				Object:       object,
-				Conversation: conversationID,
-				Model:        model,
-				CreatedAt:    createdAt,
-				Metadata:     map[string]string{},
+				Id:        rid,
+				Object:    object,
+				Model:     model,
+				CreatedAt: createdAt,
+				Metadata:  map[string]string{},
+			}
+			if conversationID.Valid {
+				response.Conversation = conversationID.String
 			}
 			if input.Valid {
 				response.Input = json.RawMessage(input.String)
@@ -314,7 +317,8 @@ ORDER BY r.created_at ASC, r.id ASC, m.key ASC
 	order := []string{}
 
 	for rows.Next() {
-		var rid, object, conversationID, model string
+		var rid, object, model string
+		var conversationID sql.NullString
 		var createdAt int64
 		var input sql.NullString
 		var output sql.NullString
@@ -326,12 +330,14 @@ ORDER BY r.created_at ASC, r.id ASC, m.key ASC
 		resp, exists := responsesMap[rid]
 		if !exists {
 			resp = &Response{
-				Id:           rid,
-				Object:       object,
-				Conversation: conversationID,
-				Model:        model,
-				CreatedAt:    createdAt,
-				Metadata:     map[string]string{},
+				Id:        rid,
+				Object:    object,
+				Model:     model,
+				CreatedAt: createdAt,
+				Metadata:  map[string]string{},
+			}
+			if conversationID.Valid {
+				resp.Conversation = conversationID.String
 			}
 			if input.Valid {
 				resp.Input = json.RawMessage(input.String)

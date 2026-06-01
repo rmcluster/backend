@@ -78,3 +78,49 @@ func TestCreateGetListResponse(t *testing.T) {
 		t.Fatalf("expected response id %q in list, got %q", resp.Id, responses[0].Id)
 	}
 }
+
+func TestCreateGetListResponseWithoutConversation(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "conversations.db")
+	db, err := OpenDB(dbPath, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	svc := NewConversationsService(db, "http://example.com")
+
+	resp := &Response{
+		Model:    "gpt-test",
+		Metadata: map[string]string{"role": "assistant"},
+		Input:    json.RawMessage(`{"content":"hello"}`),
+		Output:   json.RawMessage(`{"content":"world"}`),
+	}
+	if err := svc.CreateResponse(resp); err != nil {
+		t.Fatal(err)
+	}
+
+	fetched, err := svc.GetResponse(resp.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fetched.Id != resp.Id {
+		t.Fatalf("expected id %q, got %q", resp.Id, fetched.Id)
+	}
+	if fetched.Conversation != "" {
+		t.Fatalf("expected empty conversation, got %q", fetched.Conversation)
+	}
+
+	responses, err := svc.ListResponses()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(responses) != 1 {
+		t.Fatalf("expected 1 response, got %d", len(responses))
+	}
+	if responses[0].Id != resp.Id {
+		t.Fatalf("expected response id %q in list, got %q", resp.Id, responses[0].Id)
+	}
+	if responses[0].Conversation != "" {
+		t.Fatalf("expected empty conversation in list, got %q", responses[0].Conversation)
+	}
+}
