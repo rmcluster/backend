@@ -13,6 +13,8 @@ import (
 	"github.com/openai/openai-go/v2"
 	"github.com/openai/openai-go/v2/conversations"
 	"github.com/openai/openai-go/v2/option"
+	"github.com/openai/openai-go/v2/packages/param"
+	"github.com/openai/openai-go/v2/responses"
 )
 
 func main() {
@@ -32,6 +34,7 @@ func main() {
 	log.Printf("Testing conversations API at %s", normalizedBaseURL)
 	client := openai.NewClient(option.WithBaseURL(normalizedBaseURL))
 	conversationSvc := conversations.NewConversationService(option.WithBaseURL(normalizedBaseURL))
+	responseSvc := client.Responses
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
@@ -72,7 +75,47 @@ func main() {
 	}
 	log.Printf("Deleted conversation %s", conversation.ID)
 
-	fmt.Printf("Conversation API smoke test succeeded against %s\n", normalizedBaseURL)
+	log.Printf("Discovering available models")
+	modelID, err := chooseModel(ctx, client)
+	if err != nil {
+		log.Fatalf("model discovery failed: %v", err)
+	}
+	log.Printf("Using model %s for response tests", modelID)
+
+	log.Printf("Creating response")
+	response, err := createResponse(ctx, responseSvc, modelID)
+	if err != nil {
+		log.Fatalf("response create failed: %v", err)
+	}
+	log.Printf("Created response %s", response.ID)
+
+	log.Printf("Fetching response %s", response.ID)
+	fetchedResponse, err := responseSvc.Get(ctx, response.ID, responses.ResponseGetParams{})
+	if err != nil {
+		log.Fatalf("response get failed: %v", err)
+	}
+	if fetchedResponse.ID != response.ID {
+		log.Fatalf("response ID mismatch: created %q, fetched %q", response.ID, fetchedResponse.ID)
+	}
+	if fetchedResponse.Object != "response" {
+		log.Fatalf("expected fetched response object to be response, got %q", fetchedResponse.Object)
+	}
+	if fetchedResponse.Status == "" {
+		log.Fatalf("expected fetched response status to be populated")
+	}
+	log.Printf("Fetched response %s with status %s", fetchedResponse.ID, fetchedResponse.Status)
+
+	log.Printf("Listing responses")
+	responsesList, err := listResponses(ctx, client)
+	if err != nil {
+		log.Fatalf("response list failed: %v", err)
+	}
+	if !containsResponse(responsesList, response.ID) {
+		log.Fatalf("response %q not found in list", response.ID)
+	}
+	log.Printf("Verified response %s appears in list", response.ID)
+
+	fmt.Printf("Conversation and response API smoke test succeeded against %s\n", normalizedBaseURL)
 }
 
 func normalizeBaseURL(raw string) (string, error) {
@@ -98,6 +141,29 @@ func createConversation(ctx context.Context, svc conversations.ConversationServi
 	return svc.New(ctx, req)
 }
 
+func chooseModel(ctx context.Context, client openai.Client) (string, error) {
+	return "hf:unsloth/Qwen3-0.6B-GGUF:UD-Q4_K_XL", nil // hardcoded for now since discovery doesn't quite work
+	modelsPage, err := client.Models.List(ctx)
+	if err != nil {
+		return "", err
+	}
+	if len(modelsPage.Data) == 0 {
+		return "", fmt.Errorf("no models returned")
+	}
+	return modelsPage.Data[0].ID, nil
+}
+
+func createResponse(ctx context.Context, svc responses.ResponseService, model string) (*responses.Response, error) {
+	req := responses.ResponseNewParams{
+		Metadata: openai.Metadata{"source": "test_conversations"},
+		Model:    openai.ResponsesModel(model),
+		Input: responses.ResponseNewParamsInputUnion{
+			OfString: param.NewOpt("Hello from response smoke test"),
+		},
+	}
+	return svc.New(ctx, req)
+}
+
 func listConversations(ctx context.Context, client openai.Client) ([]conversations.Conversation, error) {
 	var response struct {
 		Object string                       `json:"object"`
@@ -109,9 +175,29 @@ func listConversations(ctx context.Context, client openai.Client) ([]conversatio
 	return response.Data, nil
 }
 
+func listResponses(ctx context.Context, client openai.Client) ([]responses.Response, error) {
+	var response struct {
+		Object string               `json:"object"`
+		Data   []responses.Response `json:"data"`
+	}
+	if err := client.Get(ctx, "responses", nil, &response); err != nil {
+		return nil, err
+	}
+	return response.Data, nil
+}
+
 func containsConversation(list []conversations.Conversation, conversationID string) bool {
 	for _, item := range list {
 		if item.ID == conversationID {
+			return true
+		}
+	}
+	return false
+}
+
+func containsResponse(list []responses.Response, responseID string) bool {
+	for _, item := range list {
+		if item.ID == responseID {
 			return true
 		}
 	}
