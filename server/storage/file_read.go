@@ -3,12 +3,14 @@ package storage
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 
 	"github.com/rmcluster/backend/server/gcas"
+	xwebdav "golang.org/x/net/webdav"
 )
 
 type readFile struct {
@@ -24,6 +26,8 @@ type readFile struct {
 
 	closed bool
 }
+
+var _ xwebdav.DeadPropsHolder = (*readFile)(nil)
 
 type chunkRef struct {
 	hash gcas.Hash
@@ -141,4 +145,31 @@ func (f *readFile) locate(pos int64) (int, int64, error) {
 	}
 
 	return len(f.chunks) - 1, f.chunks[len(f.chunks)-1].size, nil
+}
+
+func (f *readFile) DeadProps() (map[xml.Name]xwebdav.Property, error) {
+	hashes := make([]gcas.Hash, 0, len(f.chunks))
+	for _, chunk := range f.chunks {
+		hashes = append(hashes, chunk.hash)
+	}
+
+	prop, ok, err := devicePropertyForHashes(f.ctx, f.gcas, hashes)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return map[xml.Name]xwebdav.Property{}, nil
+	}
+	return map[xml.Name]xwebdav.Property{
+		prop.XMLName: prop,
+	}, nil
+}
+
+func (f *readFile) Patch(_ []xwebdav.Proppatch) ([]xwebdav.Propstat, error) {
+	return []xwebdav.Propstat{{
+		Status: 403,
+		Props: []xwebdav.Property{{
+			XMLName: webdavDevicesPropName,
+		}},
+	}}, nil
 }
