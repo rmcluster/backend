@@ -10,7 +10,7 @@ type LoadingStatusTracker struct {
 	model       string
 	phase       string
 	progress    float64
-	layersOnGpu int
+	layersOnRpc int
 }
 
 // OnPhaseUpdate is used as the SetPhaseCallback target on an InstanceFactory.
@@ -20,7 +20,7 @@ func (t *LoadingStatusTracker) OnPhaseUpdate(model, phase string, progress float
 		t.model = ""
 		t.phase = ""
 		t.progress = 0
-		t.layersOnGpu = 0
+		t.layersOnRpc = 0
 	} else {
 		t.model = model
 		t.phase = phase
@@ -30,17 +30,17 @@ func (t *LoadingStatusTracker) OnPhaseUpdate(model, phase string, progress float
 }
 
 // OnLayersKnown is called when llama.cpp reports how many layers were offloaded.
-func (t *LoadingStatusTracker) OnLayersKnown(layersOnGpu int) {
+func (t *LoadingStatusTracker) OnLayersKnown(layersOnRpc int) {
 	t.mu.Lock()
-	t.layersOnGpu = layersOnGpu
+	t.layersOnRpc = layersOnRpc
 	t.mu.Unlock()
 }
 
 // GetLoadingStatus implements [LoadingStatusProvider].
-func (t *LoadingStatusTracker) GetLoadingStatus() (model, phase string, progress float64, layersOnGpu int) {
+func (t *LoadingStatusTracker) GetLoadingStatus() (model, phase string, progress float64, layersOnRpc int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.model, t.phase, t.progress, t.layersOnGpu
+	return t.model, t.phase, t.progress, t.layersOnRpc
 }
 
 var _ LoadingStatusProvider = (*LoadingStatusTracker)(nil)

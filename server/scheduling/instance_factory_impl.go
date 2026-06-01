@@ -27,7 +27,7 @@ type instanceFactoryImpl struct {
 	lowestPort     int              // the lowest port to use
 	usedPorts      map[int]struct{} // ports that are currently in use
 	phaseCallback  func(model, phase string, progress float64)
-	layersCallback func(layersOnGpu int)
+	layersCallback func(layersOnRpc int)
 }
 
 // SetPhaseCallback implements [PhaseCallbackSetter].
@@ -38,7 +38,7 @@ func (i *instanceFactoryImpl) SetPhaseCallback(cb func(model, phase string, prog
 }
 
 // SetLayersCallback implements [PhaseCallbackSetter].
-func (i *instanceFactoryImpl) SetLayersCallback(cb func(layersOnGpu int)) {
+func (i *instanceFactoryImpl) SetLayersCallback(cb func(layersOnRpc int)) {
 	i.Lock()
 	defer i.Unlock()
 	i.layersCallback = cb
@@ -100,15 +100,15 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 		}
 	}
 
-	layersCb := func(layersOnGpu int) {
+	layersCb := func(layersOnRPC int) {
 		i.Lock()
 		cb := i.layersCallback
 		i.Unlock()
 		if cb != nil {
-			cb(layersOnGpu)
+			cb(layersOnRPC)
 		}
 		inst.mu.Lock()
-		inst.layersOnGpu = layersOnGpu
+		inst.layersOnRPC = layersOnRPC
 		inst.mu.Unlock()
 	}
 

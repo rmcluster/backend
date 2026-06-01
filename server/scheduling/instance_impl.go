@@ -22,7 +22,7 @@ type instanceImpl struct {
 	mu              sync.Mutex
 	loadingPhase    string
 	loadingProgress float64
-	layersOnGpu     int
+	layersOnRPC     int
 	nodes           []Node
 }
 
@@ -93,10 +93,10 @@ func (i *instanceImpl) GetOpenAIClient() openai.Client {
 }
 
 // GetLoadingStatus implements LoadingStatusProvider for the instance.
-func (i *instanceImpl) GetLoadingStatus() (model, phase string, progress float64, layersOnGpu int) {
+func (i *instanceImpl) GetLoadingStatus() (model, phase string, progress float64, layersOnRPC int) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	return i.model, i.loadingPhase, i.loadingProgress, i.layersOnGpu
+	return i.model, i.loadingPhase, i.loadingProgress, i.layersOnRPC
 }
 
 // Kill implements [Instance].

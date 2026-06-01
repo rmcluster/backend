@@ -18,12 +18,12 @@ type LoadingStatusProvider interface {
 	// GetLoadingStatus returns the active model name, its current phase,
 	// download progress in [0,100] (meaningful only when phase == PhaseDownloading),
 	// and the number of layers offloaded to remote GPU nodes (0 until known).
-	GetLoadingStatus() (model, phase string, progress float64, layersOnGpu int)
+	GetLoadingStatus() (model, phase string, progress float64, layersOnRpc int)
 }
 
 // PhaseCallbackSetter is optionally implemented by an InstanceFactory so
 // the scheduler can register a hook that fires whenever the loading phase changes.
 type PhaseCallbackSetter interface {
 	SetPhaseCallback(func(model, phase string, progress float64))
-	SetLayersCallback(func(layersOnGpu int))
+	SetLayersCallback(func(layersOnRpc int))
 }
