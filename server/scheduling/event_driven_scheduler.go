@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/rmcluster/backend/llama"
@@ -92,12 +93,14 @@ type EventDrivenScheduler struct {
 	taskCompletedChan      chan taskCompletionMessage
 	instanceDeadChan       chan instanceState
 	memoryTargetMultiplier float64
+	parallelismTarget      atomic.Int32
 	modelSizeCache         map[string]int64
 	idleBias               time.Duration
 }
 
 // NewEventDrivenScheduler constructs a new scheduler that decides one action per event.
-func NewEventDrivenScheduler(instanceFactory InstanceFactory, llmService llama.Llama, memoryTargetMultiplier float64) *EventDrivenScheduler {
+// parallelismTarget is the number of nodes to allocate per new instance (minimum 1).
+func NewEventDrivenScheduler(instanceFactory InstanceFactory, llmService llama.Llama, memoryTargetMultiplier float64, parallelismTarget int) *EventDrivenScheduler {
 	if memoryTargetMultiplier <= 0 {
 		memoryTargetMultiplier = DefaultMemoryTargetMultiplier
 	}
@@ -116,10 +119,23 @@ func NewEventDrivenScheduler(instanceFactory InstanceFactory, llmService llama.L
 		instanceDeadChan:       make(chan instanceState, 16),
 		memoryTargetMultiplier: memoryTargetMultiplier,
 		modelSizeCache:         make(map[string]int64),
-		idleBias:               10 * time.Second,
+		idleBias: 10 * time.Second,
 	}
+	scheduler.parallelismTarget.Store(int32(max(parallelismTarget, 1)))
 	go scheduler.run()
 	return scheduler
+}
+
+func (s *EventDrivenScheduler) GetParallelismTarget() int {
+	return int(s.parallelismTarget.Load())
+}
+
+func (s *EventDrivenScheduler) SetParallelismTarget(n int) {
+	if n < 1 {
+		n = 1
+	}
+	s.parallelismTarget.Store(int32(n))
+	log.Printf("EventDrivenScheduler: parallelism target set to %d", n)
 }
 
 // OnNewTask implements [Scheduler].
@@ -297,41 +313,48 @@ func (s *EventDrivenScheduler) pickIdleInstanceFor(model string) *instanceState 
 }
 
 func (s *EventDrivenScheduler) pickNodesForNewInstance(model string) ([]Node, bool) {
-	target := s.memoryTargetForModel(model)
+	_ = model
+	target := s.GetParallelismTarget()
+	available := s.availableNodesSorted()
 
-	available := make([]Node, 0, len(s.unallocatedNodes))
-	for _, node := range s.unallocatedNodes {
-		available = append(available, node)
-	}
-	sort.Slice(available, func(i, j int) bool {
-		return available[i].MaxSize() > available[j].MaxSize()
-	})
-
-	selected := make([]Node, 0, len(available))
-	total := int64(0)
-	for _, node := range available {
-		selected = append(selected, node)
-		total += node.MaxSize()
-		if total >= target {
-			return selected, true
+	for len(available) < target {
+		if !s.scavengeOneIdleInstance() {
+			break
 		}
+		available = s.availableNodesSorted()
 	}
 
+	if len(available) < target {
+		return nil, false
+	}
+
+	return append([]Node(nil), available[:target]...), true
+}
+
+func (s *EventDrivenScheduler) availableNodesSorted() []Node {
+	nodes := make([]Node, 0, len(s.unallocatedNodes))
+	for _, node := range s.unallocatedNodes {
+		nodes = append(nodes, node)
+	}
+	sort.Slice(nodes, func(i, j int) bool {
+		if nodes[i].MaxSize() == nodes[j].MaxSize() {
+			return nodes[i].Id() < nodes[j].Id()
+		}
+		return nodes[i].MaxSize() > nodes[j].MaxSize()
+	})
+	return nodes
+}
+
+func (s *EventDrivenScheduler) scavengeOneIdleInstance() bool {
 	idleInstances := s.collectIdleInstancesSortedByKillCost()
 	for _, inst := range idleInstances {
 		if !s.checkInstanceNodesStillOk(inst) {
 			continue
 		}
-		for _, node := range inst.usedNodes {
-			selected = append(selected, node)
-			total += node.MaxSize()
-		}
-		if total >= target {
-			return selected, true
-		}
+		s.killInstance(inst)
+		return true
 	}
-
-	return nil, false
+	return false
 }
 
 func (s *EventDrivenScheduler) memoryTargetForModel(model string) int64 {
