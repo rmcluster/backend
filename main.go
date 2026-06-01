@@ -126,8 +126,6 @@ func main() {
 	cas := gcas.NewGCAS(gcasdb)
 	tracker.DefaultTracker.Subscribe(gcassubscriber.NewGCASSubscriber(cas))
 	server := server.NewServer(ramalama, scheduler)
-	ui := uiapi.New(tracker.DefaultTracker, ramalama, loadingTracker)
-	ui.RegisterHandlers(mux)
 
 	if args.Storagedb == nil {
 		log.Fatalf("No storage database specified")
