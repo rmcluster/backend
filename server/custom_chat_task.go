@@ -43,10 +43,14 @@ func (n nodeJsoner) MarshalJSON() ([]byte, error) {
 	// id is not included, because the real id isn't in the scheduler's Node interface,
 	// and in any case would allow for impersonating nodes
 	return json.Marshal(map[string]any{
-		"ip":       n.node.Ip(),
-		"port":     n.node.Port(),
-		"max_size": n.node.MaxSize(),
-		"nickname": n.node.Nickname(),
+		"ip":             n.node.Ip(),
+		"port":           n.node.Port(),
+		"storage_port":   n.node.StoragePort(),
+		"max_size":       n.node.MaxSize(),
+		"nickname":       n.node.Nickname(),
+		"hardware_model": n.node.HardwareModel(),
+		"battery":        n.node.Battery(),
+		"temperature":    n.node.Temperature(),
 	})
 }
 

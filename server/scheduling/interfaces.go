@@ -28,6 +28,10 @@ type Node interface {
 	Port() int
 	MaxSize() int64
 	Nickname() string
+	StoragePort() int
+	HardwareModel() string
+	Battery() float64
+	Temperature() float64
 }
 
 type Task interface {
