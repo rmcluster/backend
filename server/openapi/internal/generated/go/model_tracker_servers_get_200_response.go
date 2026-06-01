@@ -10,6 +10,5 @@
 package openapi
 
 type TrackerServersGet200Response struct {
-
 	Servers []TrackerServersGet200ResponseServersInner `json:"servers"`
 }

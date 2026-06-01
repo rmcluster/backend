@@ -16,14 +16,14 @@ const (
 
 // FcfsScheduler implements [Scheduler] using a first-come-first-served policy.
 type FcfsScheduler struct {
-	mu           sync.Mutex
-	factory      InstanceFactory
-	nodes        map[string]Node
-	queue        []Task
-	state        schedulerState
-	activeModel  string
-	activeInst   Instance
-	runningTasks int
+	mu              sync.Mutex
+	factory         InstanceFactory
+	nodes           map[string]Node
+	queue           []Task
+	state           schedulerState
+	activeModel     string
+	activeInst      Instance
+	runningTasks    int
 	loadingPhase    string  // set while state == stateStarting
 	loadingProgress float64 // download progress [0,100], only meaningful during PhaseDownloading
 }

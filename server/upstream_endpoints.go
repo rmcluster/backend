@@ -23,7 +23,6 @@ func (s *Server) serveUpstream(w http.ResponseWriter, r *http.Request) {
 	<-task.done
 }
 
-
 func (s *Server) demangle(name string) (string, error) {
 	if s.ModelNameMangler == nil {
 		return name, nil

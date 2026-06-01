@@ -4,12 +4,12 @@ package scheduling
 type LoadingPhase = string
 
 const (
-	PhaseStarting      LoadingPhase = "starting"
-	PhaseInitializing  LoadingPhase = "initializing"
-	PhaseDownloading   LoadingPhase = "downloading"
-	PhaseLoading       LoadingPhase = "loading_model"
-	PhaseWarmingUp     LoadingPhase = "warming_up"
-	PhaseReady         LoadingPhase = "ready"
+	PhaseStarting     LoadingPhase = "starting"
+	PhaseInitializing LoadingPhase = "initializing"
+	PhaseDownloading  LoadingPhase = "downloading"
+	PhaseLoading      LoadingPhase = "loading_model"
+	PhaseWarmingUp    LoadingPhase = "warming_up"
+	PhaseReady        LoadingPhase = "ready"
 )
 
 // LoadingStatusProvider is optionally implemented by a Scheduler to expose
