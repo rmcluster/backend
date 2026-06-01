@@ -93,14 +93,8 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 		// update instance-local state for the matching model
 		if m == inst.model {
 			inst.mu.Lock()
-			if phase == PhaseReady {
-				inst.loadingPhase = ""
-				inst.loadingProgress = 0
-				inst.layersOnGpu = 0
-			} else {
-				inst.loadingPhase = phase
-				inst.loadingProgress = progress
-			}
+			inst.loadingPhase = phase
+			inst.loadingProgress = progress
 			inst.mu.Unlock()
 		}
 	}
