@@ -23,11 +23,11 @@ func (g *GcasImpl) DevicesForHashes(ctx context.Context, hashes []Hash) ([]Devic
 	}
 
 	query := fmt.Sprintf(`
-		SELECT c.node_id, dm.display_name
+		SELECT c.node_id, COALESCE(dm.display_name, '')
 		FROM chunks c
 		LEFT JOIN device_metadata dm ON dm.node_id = c.node_id
 		WHERE c.is_data = 1 AND c.hash IN (%s)
-		GROUP BY c.node_id, dm.display_name
+		GROUP BY c.node_id, COALESCE(dm.display_name, '')
 	`, strings.Join(placeholders, ","))
 
 	rows, err := g.db.QueryContext(ctx, query, args...)
