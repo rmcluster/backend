@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/openai/openai-go/v2"
 	"github.com/rmcluster/backend/server/scheduling"
@@ -132,14 +133,6 @@ func (p *customChatTask) PerformInference(instance scheduling.Instance) (err err
 		lastStatus := "started"
 		lastPercentage := 0.0
 		for {
-			select {
-			case <-p.r.Context().Done():
-				return
-			case <-stopStatusPolling:
-				return
-			default:
-			}
-
 			_, status, percentage, _ := instance.GetLoadingStatus()
 			if status != lastStatus || percentage != lastPercentage {
 				err := sendEvent(customChatStatusEvent{
@@ -153,6 +146,13 @@ func (p *customChatTask) PerformInference(instance scheduling.Instance) (err err
 
 				lastStatus = status
 				lastPercentage = percentage
+			}
+			select {
+			case <-p.r.Context().Done():
+				return
+			case <-stopStatusPolling:
+				return
+			case <-time.After(100 * time.Millisecond): // arbitrarily chosen polling interval
 			}
 		}
 	}()
