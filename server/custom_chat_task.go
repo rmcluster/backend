@@ -164,9 +164,15 @@ func (p *customChatTask) PerformInference(instance scheduling.Instance) (err err
 			continue
 		}
 
+		token := chunk.Choices[0].Delta.Content
+
+		if token == "" {
+			continue // don't forward empty tokens
+		}
+
 		err := sendEvent(customChatTokenEvent{
 			Type:  "token",
-			Token: chunk.Choices[0].Delta.Content,
+			Token: token,
 		})
 		if err != nil {
 			log.Printf("Failed to send token event: %v", err)
