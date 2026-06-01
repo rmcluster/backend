@@ -44,6 +44,8 @@ func (s *Server) HandleHttp(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/completions", s.handleCompletions)
 	mux.HandleFunc("/v1/conversations", s.handleConversations)
 	mux.HandleFunc("/v1/conversations/", s.handleConversationByID)
+	mux.HandleFunc("/v1/responses", s.handleResponses)
+	mux.HandleFunc("/v1/responses/", s.handleResponseByID)
 
 	// llama-swap style endpoint
 	mux.HandleFunc("/upstream/", s.serveUpstream)
@@ -166,6 +168,44 @@ func (s *Server) handleConversationByID(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
+func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
+	if s.Conversations == nil {
+		http.Error(w, "conversations service unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPost:
+		s.handleCreateResponse(w, r)
+	case http.MethodGet:
+		s.handleListResponses(w, r)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleResponseByID(w http.ResponseWriter, r *http.Request) {
+	if s.Conversations == nil {
+		http.Error(w, "conversations service unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path, "/v1/responses/")
+	if id == "" || strings.Contains(id, "/") {
+		http.NotFound(w, r)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		s.handleGetResponse(w, r, id)
+	default:
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 func (s *Server) handleCreateConversation(w http.ResponseWriter, r *http.Request) {
 	var conv conversations.Conversation
 	if err := json.NewDecoder(r.Body).Decode(&conv); err != nil {
@@ -246,6 +286,71 @@ func (s *Server) handleDeleteConversation(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(map[string]any{"id": id, "deleted": true})
+}
+
+func (s *Server) handleCreateResponse(w http.ResponseWriter, r *http.Request) {
+	var resp conversations.Response
+	if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("invalid request body"))
+		return
+	}
+
+	if resp.Metadata == nil {
+		resp.Metadata = map[string]string{}
+	}
+
+	if err := s.Conversations.CreateResponse(&resp); err != nil {
+		if err == conversations.ErrInvalidResponseId || err == conversations.ErrInvalidResponseObject || err == conversations.ErrInvalidResponseCreatedAt || err == conversations.ErrInvalidResponseModel {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(err.Error()))
+			return
+		}
+		log.Printf("Failed to create response: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("internal server error"))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (s *Server) handleListResponses(w http.ResponseWriter, r *http.Request) {
+	responsesList, err := s.Conversations.ListResponses()
+	if err != nil {
+		log.Printf("Failed to list responses: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("internal server error"))
+		return
+	}
+
+	response := map[string]any{
+		"object": "list",
+		"data":   responsesList,
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (s *Server) handleGetResponse(w http.ResponseWriter, r *http.Request, id string) {
+	response, err := s.Conversations.GetResponse(id)
+	if err != nil {
+		if err == conversations.ErrResponseNotFound {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte("response not found"))
+			return
+		}
+		log.Printf("Failed to get response %s: %v", id, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("internal server error"))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(response)
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
