@@ -23,6 +23,7 @@ type instanceImpl struct {
 	loadingPhase    string
 	loadingProgress float64
 	layersOnGpu     int
+	nodes           []Node
 }
 
 // Model implements [Instance].
@@ -111,6 +112,15 @@ func (i *instanceImpl) Stop() {
 	} else {
 		i.process.Signal(os.Interrupt)
 	}
+}
+
+// GetUsedNodes implements [Instance].
+func (i *instanceImpl) GetUsedNodes() []Node {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	nodes := make([]Node, len(i.nodes))
+	copy(nodes, i.nodes)
+	return nodes
 }
 
 var _ Instance = (*instanceImpl)(nil)
