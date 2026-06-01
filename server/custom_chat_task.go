@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"log"
+	"math"
 	"net/http"
 	"sync"
 	"time"
@@ -39,6 +40,13 @@ type nodeJsoner struct {
 
 var _ json.Marshaler = nodeJsoner{}
 
+func zeroNaN64(f float64) float64 {
+	if math.IsNaN(f) {
+		return 0
+	}
+	return f
+}
+
 func (n nodeJsoner) MarshalJSON() ([]byte, error) {
 	// id is not included, because the real id isn't in the scheduler's Node interface,
 	// and in any case would allow for impersonating nodes
@@ -49,8 +57,8 @@ func (n nodeJsoner) MarshalJSON() ([]byte, error) {
 		"max_size":       n.node.MaxSize(),
 		"nickname":       n.node.Nickname(),
 		"hardware_model": n.node.HardwareModel(),
-		"battery":        n.node.Battery(),
-		"temperature":    n.node.Temperature(),
+		"battery":        zeroNaN64(n.node.Battery()),
+		"temperature":    zeroNaN64(n.node.Temperature()),
 	})
 }
 
