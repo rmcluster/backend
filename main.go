@@ -12,14 +12,15 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/rmcluster/backend/llama"
-	"github.com/rmcluster/backend/server/scheduling"
-	"github.com/rmcluster/backend/server/webdavservice"
 	"github.com/rmcluster/backend/server"
+	"github.com/rmcluster/backend/server/conversations"
 	"github.com/rmcluster/backend/server/gcas"
 	gcassubscriber "github.com/rmcluster/backend/server/gcas_subscriber"
 	"github.com/rmcluster/backend/server/openapi"
 	schedulersubscriber "github.com/rmcluster/backend/server/scheduler_subscriber"
+	"github.com/rmcluster/backend/server/scheduling"
 	"github.com/rmcluster/backend/server/storage"
+	"github.com/rmcluster/backend/server/webdavservice"
 	"github.com/rmcluster/backend/tracker"
 	"github.com/rmcluster/backend/uiapi"
 )
@@ -115,6 +116,20 @@ func main() {
 		}
 	}()
 
+	if args.Conversationdb == nil {
+		log.Fatalf("No conversations database specified")
+	}
+
+	conversationDb, err := conversations.OpenDB(*args.Conversationdb, 1)
+	if err != nil {
+		log.Fatalf("Failed to open conversations database: %v", err)
+	}
+	defer func() {
+		if err := conversationDb.Close(); err != nil {
+			log.Printf("Failed to close conversations database: %v", err)
+		}
+	}()
+
 	factory := scheduling.NewInstanceFactory(&ramalama, 49170)
 	loadingTracker := &scheduling.LoadingStatusTracker{}
 	if setter, ok := factory.(scheduling.PhaseCallbackSetter); ok {
@@ -125,7 +140,6 @@ func main() {
 	tracker.DefaultTracker.Subscribe(schedulersubscriber.NewSchedulerSubscriber(scheduler))
 	cas := gcas.NewGCAS(gcasdb)
 	tracker.DefaultTracker.Subscribe(gcassubscriber.NewGCASSubscriber(cas))
-	server := server.NewServer(ramalama, scheduler)
 	ui := uiapi.New(tracker.DefaultTracker, ramalama, loadingTracker)
 	ui.RegisterHandlers(mux)
 
@@ -147,6 +161,9 @@ func main() {
 	}
 	webdavService := webdavservice.NewWebDavService(storageSvc)
 	webdavService.RegisterGinHandlers(router)
+
+	conversationSvc := conversations.NewConversationsService(conversationDb, fmt.Sprintf("http://127.0.0.1:%d/api/v1", *args.Port))
+	server := server.NewServer(ramalama, scheduler, conversationSvc)
 
 	server.ModelNameMangler = func(s string) string {
 		return strings.ReplaceAll(s, "/", "_")

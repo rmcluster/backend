@@ -17,5 +17,6 @@ ENV RMD_MODEL_STORAGE_DIR=/var/lib/rmd/models
 RUN mkdir -p /var/lib/rmd
 RUN mkdir -p /var/lib/rmd/models
 VOLUME ["/var/lib/rmd"]
-ENTRYPOINT [ "rmd-server", "-host", "0.0.0.0", "-port", "4917" ]
+# todo: set location of storage and gcas dbs here as well to minimize configuration in compose file
+ENTRYPOINT [ "rmd-server", "-host", "0.0.0.0", "-port", "4917", "-conversationdb", "/var/lib/rmd/conversations.db" ]
 EXPOSE 4917

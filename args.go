@@ -12,12 +12,13 @@ import (
 )
 
 type args struct {
-	Gcasdb      *string
-	Storagedb   *string
-	Ramalama    []string
-	Port        *int
-	Host        *string
-	IdleTimeout *time.Duration
+	Gcasdb         *string
+	Storagedb      *string
+	Conversationdb *string
+	Ramalama       []string
+	Port           *int
+	Host           *string
+	IdleTimeout    *time.Duration
 }
 
 // cli should include the name of the command itself
@@ -120,6 +121,19 @@ func parseArgs(cli []string) (a args, rest []string, err error) {
 			}
 
 			a.Gcasdb = &cli[1]
+
+			cli = cli[2:]
+
+		case "-conversationdb":
+			if a.Conversationdb != nil {
+				return args{}, nil, fmt.Errorf("%s may only be passed at most once", cli[0])
+			}
+
+			if len(cli) < 2 {
+				return args{}, nil, fmt.Errorf("expected path to conversations database after %s", cli[0])
+			}
+
+			a.Conversationdb = &cli[1]
 
 			cli = cli[2:]
 
