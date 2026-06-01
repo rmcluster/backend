@@ -6,15 +6,13 @@ import (
 	"encoding/xml"
 	"sort"
 
-	goxml "encoding/xml"
-	xwebdav "golang.org/x/net/webdav"
-
 	"github.com/rmcluster/backend/server/gcas"
+	xwebdav "golang.org/x/net/webdav"
 )
 
 const webdavPropNamespace = "urn:rmcluster:webdav"
 
-var webdavDevicesPropName = goxml.Name{Space: webdavPropNamespace, Local: "devices"}
+var webdavDevicesPropName = xml.Name{Space: webdavPropNamespace, Local: "devices"}
 
 type gcasDeviceProvider interface {
 	DevicesForHashes(ctx context.Context, hashes []gcas.Hash) ([]gcas.DeviceDisplay, error)
