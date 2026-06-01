@@ -99,8 +99,8 @@ type EventDrivenScheduler struct {
 }
 
 // NewEventDrivenScheduler constructs a new scheduler that decides one action per event.
-// parallelismTarget is the number of nodes to allocate per new instance (minimum 1).
-func NewEventDrivenScheduler(instanceFactory InstanceFactory, llmService llama.Llama, memoryTargetMultiplier float64, parallelismTarget int) *EventDrivenScheduler {
+// Parallelism target defaults to 0 (auto-size from model memory); use SetParallelismTarget to cap nodes.
+func NewEventDrivenScheduler(instanceFactory InstanceFactory, llmService llama.Llama, memoryTargetMultiplier float64) *EventDrivenScheduler {
 	if memoryTargetMultiplier <= 0 {
 		memoryTargetMultiplier = DefaultMemoryTargetMultiplier
 	}
@@ -121,7 +121,6 @@ func NewEventDrivenScheduler(instanceFactory InstanceFactory, llmService llama.L
 		modelSizeCache:         make(map[string]int64),
 		idleBias: 10 * time.Second,
 	}
-	scheduler.parallelismTarget.Store(int32(max(parallelismTarget, 1)))
 	go scheduler.run()
 	return scheduler
 }
@@ -131,8 +130,8 @@ func (s *EventDrivenScheduler) GetParallelismTarget() int {
 }
 
 func (s *EventDrivenScheduler) SetParallelismTarget(n int) {
-	if n < 1 {
-		n = 1
+	if n < 0 {
+		n = 0
 	}
 	s.parallelismTarget.Store(int32(n))
 	log.Printf("EventDrivenScheduler: parallelism target set to %d", n)
@@ -313,8 +312,13 @@ func (s *EventDrivenScheduler) pickIdleInstanceFor(model string) *instanceState 
 }
 
 func (s *EventDrivenScheduler) pickNodesForNewInstance(model string) ([]Node, bool) {
-	_ = model
-	target := s.GetParallelismTarget()
+	if s.GetParallelismTarget() > 0 {
+		return s.pickNodesWithParallelismTarget(s.GetParallelismTarget())
+	}
+	return s.pickNodesByMemoryTarget(model)
+}
+
+func (s *EventDrivenScheduler) pickNodesWithParallelismTarget(target int) ([]Node, bool) {
 	available := s.availableNodesSorted()
 
 	for len(available) < target {
@@ -329,6 +333,37 @@ func (s *EventDrivenScheduler) pickNodesForNewInstance(model string) ([]Node, bo
 	}
 
 	return append([]Node(nil), available[:target]...), true
+}
+
+func (s *EventDrivenScheduler) pickNodesByMemoryTarget(model string) ([]Node, bool) {
+	target := s.memoryTargetForModel(model)
+
+	available := s.availableNodesSorted()
+	selected := make([]Node, 0, len(available))
+	total := int64(0)
+	for _, node := range available {
+		selected = append(selected, node)
+		total += node.MaxSize()
+		if total >= target {
+			return selected, true
+		}
+	}
+
+	idleInstances := s.collectIdleInstancesSortedByKillCost()
+	for _, inst := range idleInstances {
+		if !s.checkInstanceNodesStillOk(inst) {
+			continue
+		}
+		for _, node := range inst.usedNodes {
+			selected = append(selected, node)
+			total += node.MaxSize()
+		}
+		if total >= target {
+			return selected, true
+		}
+	}
+
+	return nil, false
 }
 
 func (s *EventDrivenScheduler) availableNodesSorted() []Node {
