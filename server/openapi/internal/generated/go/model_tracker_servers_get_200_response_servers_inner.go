@@ -10,7 +10,6 @@
 package openapi
 
 type TrackerServersGet200ResponseServersInner struct {
-
 	Ip string `json:"ip"`
 
 	Port int32 `json:"port"`

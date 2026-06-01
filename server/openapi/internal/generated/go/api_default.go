@@ -15,13 +15,11 @@ import (
 
 type DefaultAPI interface {
 
+	// TrackerAnnounceGet Get /announce
+	// Announce a new node
+	TrackerAnnounceGet(c *gin.Context)
 
-    // TrackerAnnounceGet Get /announce
-    // Announce a new node 
-     TrackerAnnounceGet(c *gin.Context)
-
-    // TrackerServersGet Get /servers
-    // List all nodes currently known to the tracker 
-     TrackerServersGet(c *gin.Context)
-
+	// TrackerServersGet Get /servers
+	// List all nodes currently known to the tracker
+	TrackerServersGet(c *gin.Context)
 }

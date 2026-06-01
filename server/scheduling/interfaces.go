@@ -14,6 +14,7 @@ type Instance interface {
 	Stop()
 	Kill()
 	AwaitTermination()
+	LoadingStatusProvider
 }
 
 type InstanceFactory interface {

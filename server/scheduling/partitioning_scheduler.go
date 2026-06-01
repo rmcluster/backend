@@ -23,7 +23,6 @@ type instanceInfo struct {
 	usedNodes []Node
 }
 
-
 type TaskCompletionMessage struct {
 	instanceInfo
 	task Task
@@ -36,18 +35,18 @@ type NodeAllocationInfo struct {
 
 func NewPartitioningScheduler(instanceFactory InstanceFactory, parallelismTarget int) *PartitioningScheduler {
 	scheduler := &PartitioningScheduler{
-		instanceFactory:    instanceFactory,
-		modelQueues:        make(map[string][]*timestampedTask),
-		unallocatedNodes:   make(map[string]Node),
-		allocatedNodes:     make(map[string]NodeAllocationInfo),
-		idleInstances:      make(map[string][]instanceInfo),
+		instanceFactory:   instanceFactory,
+		modelQueues:       make(map[string][]*timestampedTask),
+		unallocatedNodes:  make(map[string]Node),
+		allocatedNodes:    make(map[string]NodeAllocationInfo),
+		idleInstances:     make(map[string][]instanceInfo),
 		newTasksChan:      make(chan Task, 16),
 		nodeEventChan:     make(chan NodeEvent, 16),
-		taskCancelledChan:  make(chan Task, 16),
-		taskCompletedChan:  make(chan TaskCompletionMessage, 16),
-		instanceDeadChan:   make(chan instanceInfo, 16),
-		parallelismTarget:  parallelismTarget,
-		idleBias:           10 * time.Second,
+		taskCancelledChan: make(chan Task, 16),
+		taskCompletedChan: make(chan TaskCompletionMessage, 16),
+		instanceDeadChan:  make(chan instanceInfo, 16),
+		parallelismTarget: parallelismTarget,
+		idleBias:          10 * time.Second,
 	}
 	go scheduler.run()
 	return scheduler
