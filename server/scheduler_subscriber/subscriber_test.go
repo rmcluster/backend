@@ -10,11 +10,11 @@ import (
 
 // MockScheduler implements scheduling.Scheduler for testing
 type MockScheduler struct {
-	mu                 sync.Mutex
-	ConnectCalls       []scheduling.Node
-	DisconnectCalls    []scheduling.Node
-	ConnectCount       int
-	DisconnectCount    int
+	mu              sync.Mutex
+	ConnectCalls    []scheduling.Node
+	DisconnectCalls []scheduling.Node
+	ConnectCount    int
+	DisconnectCount int
 }
 
 func (m *MockScheduler) OnNewTask(task scheduling.Task) {
