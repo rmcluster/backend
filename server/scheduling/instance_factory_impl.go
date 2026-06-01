@@ -72,6 +72,51 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 	}
 
 	// start the llama server
+	// prepare instance-local state and callbacks so stderr lines update the
+	// instance's stored loading status as well as the factory-wide callbacks.
+	dead := make(chan struct{})
+	inst := &instanceImpl{
+		dead:  dead,
+		port:  port,
+		model: model,
+	}
+
+	// phaseCb will update the instance state and forward to factory callback.
+	phaseCb := func(m, phase string, progress float64) {
+		// forward to factory-level callback if present
+		i.Lock()
+		cb := i.phaseCallback
+		i.Unlock()
+		if cb != nil {
+			cb(m, phase, progress)
+		}
+		// update instance-local state for the matching model
+		if m == inst.model {
+			inst.mu.Lock()
+			if phase == PhaseReady {
+				inst.loadingPhase = ""
+				inst.loadingProgress = 0
+				inst.layersOnGpu = 0
+			} else {
+				inst.loadingPhase = phase
+				inst.loadingProgress = progress
+			}
+			inst.mu.Unlock()
+		}
+	}
+
+	layersCb := func(layersOnGpu int) {
+		i.Lock()
+		cb := i.layersCallback
+		i.Unlock()
+		if cb != nil {
+			cb(layersOnGpu)
+		}
+		inst.mu.Lock()
+		inst.layersOnGpu = layersOnGpu
+		inst.mu.Unlock()
+	}
+
 	cmd, err := func() (*exec.Cmd, error) {
 		// guard critical section
 		i.Lock()
@@ -86,7 +131,7 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 		})
 		cmd.Stdout = newProcessLogWriter(model, "stdout", nil)
 		// i is already locked here — read callbacks directly, no re-lock
-		cmd.Stderr = newProcessLogWriter(model, "stderr", makePhaseDetector(model, i.phaseCallback, i.layersCallback))
+		cmd.Stderr = newProcessLogWriter(model, "stderr", makePhaseDetector(model, phaseCb, layersCb))
 
 		err := cmd.Start()
 		if err != nil {
@@ -105,7 +150,8 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 	log.Printf("Started instance process for model %s on port %d", model, port)
 	log.Printf("Instance command: %s", strings.Join(cmd.Args, " "))
 
-	dead := make(chan struct{})
+	// set process now that cmd has started
+	inst.process = cmd.Process
 
 	// wait for instance to die, then free port
 	go func() {
@@ -117,13 +163,7 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 		i.Unlock()
 	}()
 
-	// return the new instance
-	return &instanceImpl{
-		process: cmd.Process,
-		port:    port,
-		dead:    dead,
-		model:   model,
-	}, nil
+	return inst, nil
 }
 
 func chooseOffloadLayers(nodes []Node) int {

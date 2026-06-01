@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/openai/openai-go/v2"
@@ -14,10 +15,14 @@ import (
 )
 
 type instanceImpl struct {
-	process *os.Process
-	dead    chan struct{}
-	port    int
-	model   string
+	process         *os.Process
+	dead            chan struct{}
+	port            int
+	model           string
+	mu              sync.Mutex
+	loadingPhase    string
+	loadingProgress float64
+	layersOnGpu     int
 }
 
 // Model implements [Instance].
@@ -84,6 +89,13 @@ func (i *instanceImpl) GetOpenAIClient() openai.Client {
 		option.WithWebhookSecret(""),
 		option.WithBaseURL(fmt.Sprintf("http://127.0.0.1:%v", i.port)),
 	)
+}
+
+// GetLoadingStatus implements LoadingStatusProvider for the instance.
+func (i *instanceImpl) GetLoadingStatus() (model, phase string, progress float64, layersOnGpu int) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.model, i.loadingPhase, i.loadingProgress, i.layersOnGpu
 }
 
 // Kill implements [Instance].
