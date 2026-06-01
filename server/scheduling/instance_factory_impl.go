@@ -3,6 +3,7 @@ package scheduling
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log"
 	"os/exec"
 	"regexp"
@@ -28,6 +29,7 @@ type instanceFactoryImpl struct {
 	usedPorts      map[int]struct{} // ports that are currently in use
 	phaseCallback  func(model, phase string, progress float64)
 	layersCallback func(layersOnGpu int)
+	loadedDevicesCallback func(model string, devices []LoadedDevice)
 }
 
 // SetPhaseCallback implements [PhaseCallbackSetter].
@@ -42,6 +44,13 @@ func (i *instanceFactoryImpl) SetLayersCallback(cb func(layersOnGpu int)) {
 	i.Lock()
 	defer i.Unlock()
 	i.layersCallback = cb
+}
+
+// SetLoadedDevicesCallback implements [LoadedDevicesCallbackSetter].
+func (i *instanceFactoryImpl) SetLoadedDevicesCallback(cb func(model string, devices []LoadedDevice)) {
+	i.Lock()
+	defer i.Unlock()
+	i.loadedDevicesCallback = cb
 }
 
 // StartInstance implements [InstanceFactory].
@@ -60,6 +69,10 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 			Ip:   node.Ip(),
 			Port: node.Port(),
 		}
+	}
+	loadedDevices, err := loadedDevicesFromNodes(nodes)
+	if err != nil {
+		return nil, err
 	}
 
 	// find the lowest port that is not used
@@ -95,6 +108,9 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 
 		// mark port as used
 		i.usedPorts[port] = struct{}{}
+		if cb := i.loadedDevicesCallback; cb != nil {
+			cb(model, loadedDevices)
+		}
 
 		return cmd, err
 	}()
@@ -110,6 +126,12 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 	// wait for instance to die, then free port
 	go func() {
 		cmd.Wait()
+		i.Lock()
+		loadedDevicesCallback := i.loadedDevicesCallback
+		i.Unlock()
+		if loadedDevicesCallback != nil {
+			loadedDevicesCallback(model, nil)
+		}
 		close(dead)
 
 		i.Lock()
@@ -151,6 +173,28 @@ func chooseOffloadLayers(nodes []Node) int {
 
 	return defaultOffloadLayers
 }
+
+type nodeDisplayMetadata interface {
+	Nickname() string
+	HardwareModel() string
+}
+
+func loadedDevicesFromNodes(nodes []Node) ([]LoadedDevice, error) {
+	devices := make([]LoadedDevice, 0, len(nodes))
+	for _, node := range nodes {
+		displayNode, ok := node.(nodeDisplayMetadata)
+		if !ok {
+			return nil, fmt.Errorf("node %s is missing required display metadata", node.Id())
+		}
+		devices = append(devices, LoadedDevice{
+			ID:            node.Id(),
+			Nickname:      displayNode.Nickname(),
+			HardwareModel: displayNode.HardwareModel(),
+		})
+	}
+	return devices, nil
+}
+
 
 type processLogWriter struct {
 	model  string

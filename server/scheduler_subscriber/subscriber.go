@@ -2,6 +2,7 @@ package schedulersubscriber
 
 import (
 	"log"
+	"reflect"
 	"strconv"
 	"sync"
 
@@ -71,7 +72,18 @@ func convertTrackerNode(trackerNode tracker.RpcServerInfo) *node {
 		ip:      trackerNode.Ip,
 		port:    trackerNode.Port,
 		maxSize: trackerNode.MaxSize,
+		nickname: trackerNickname(trackerNode),
+		hardwareModel: trackerNode.HardwareModel,
 	}
+}
+
+func trackerNickname(trackerNode tracker.RpcServerInfo) string {
+	value := reflect.ValueOf(trackerNode)
+	field := value.FieldByName("Nickname")
+	if !field.IsValid() || field.Kind() != reflect.String {
+		return ""
+	}
+	return field.String()
 }
 
 var _ tracker.TrackerSubscriber = (*SchedulerSubscriber)(nil)

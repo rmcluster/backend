@@ -7,6 +7,8 @@ type node struct {
 	ip      string
 	port    int
 	maxSize int64
+	nickname      string
+	hardwareModel string
 }
 
 // Id implements [scheduling.Node].
@@ -27,6 +29,16 @@ func (n *node) Port() int {
 // MaxSize implements [scheduling.Node].
 func (n *node) MaxSize() int64 {
 	return n.maxSize
+}
+
+// Nickname implements [scheduling.Node].
+func (n *node) Nickname() string {
+	return n.nickname
+}
+
+// HardwareModel implements [scheduling.Node].
+func (n *node) HardwareModel() string {
+	return n.hardwareModel
 }
 
 var _ scheduling.Node = (*node)(nil)

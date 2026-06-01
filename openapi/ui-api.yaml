@@ -95,6 +95,13 @@ paths:
       tags: [ui]
       summary: Get current model loading phase and progress
       operationId: getLoadingStatus
+      parameters:
+        - name: model
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Selected chat model for loaded-device lookup
       responses:
         '200':
           description: Current loading state (empty model/phase when idle)
@@ -329,7 +336,7 @@ components:
   schemas:
     LoadingStatus:
       type: object
-      required: [model, phase, progress]
+      required: [model, phase, progress, loaded_devices]
       properties:
         model:
           type: string
@@ -341,6 +348,16 @@ components:
         progress:
           type: number
           description: Download progress 0–100; meaningful only when phase=downloading
+        layers_on_gpu:
+          type: integer
+          description: Layers currently offloaded to remote GPU devices
+        node_count:
+          type: integer
+          description: Total connected nodes, used as a generic fallback
+        loaded_devices:
+          type: array
+          items:
+            $ref: '#/components/schemas/LoadedDevice'
 
     UiApiRoot:
       type: object
@@ -439,6 +456,17 @@ components:
           type: number
           nullable: true
           description: Celsius
+
+    LoadedDevice:
+      type: object
+      required: [id, hardware_model]
+      properties:
+        id:
+          type: string
+        nickname:
+          type: string
+        hardware_model:
+          type: string
 
     DashboardResponse:
       type: object

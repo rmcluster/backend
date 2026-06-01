@@ -21,9 +21,23 @@ type LoadingStatusProvider interface {
 	GetLoadingStatus() (model, phase string, progress float64, layersOnGpu int)
 }
 
+type LoadedDevice struct {
+	ID            string `json:"id"`
+	Nickname      string `json:"nickname,omitempty"`
+	HardwareModel string `json:"hardware_model"`
+}
+
+type LoadedDevicesProvider interface {
+	GetLoadedDevices(model string) []LoadedDevice
+}
+
 // PhaseCallbackSetter is optionally implemented by an InstanceFactory so
 // the scheduler can register a hook that fires whenever the loading phase changes.
 type PhaseCallbackSetter interface {
 	SetPhaseCallback(func(model, phase string, progress float64))
 	SetLayersCallback(func(layersOnGpu int))
+}
+
+type LoadedDevicesCallbackSetter interface {
+	SetLoadedDevicesCallback(func(model string, devices []LoadedDevice))
 }

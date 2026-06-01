@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rmcluster/backend/server/scheduling"
 )
 
 // ---- API types ----
@@ -650,11 +651,16 @@ func (s *UIApi) handleLoadingStatus(w http.ResponseWriter, r *http.Request) {
 		Progress    float64 `json:"progress"`
 		LayersOnGpu int     `json:"layers_on_gpu"`
 		NodeCount   int     `json:"node_count"`
+		LoadedDevices []scheduling.LoadedDevice `json:"loaded_devices"`
 	}
 
 	var resp response
+	resp.LoadedDevices = make([]scheduling.LoadedDevice, 0)
 	if s.loadingStatus != nil {
 		resp.Model, resp.Phase, resp.Progress, resp.LayersOnGpu = s.loadingStatus.GetLoadingStatus()
+		if provider, ok := s.loadingStatus.(scheduling.LoadedDevicesProvider); ok {
+			resp.LoadedDevices = provider.GetLoadedDevices(strings.TrimSpace(r.URL.Query().Get("model")))
+		}
 	}
 	resp.NodeCount = len(s.tracker.GetServers())
 
