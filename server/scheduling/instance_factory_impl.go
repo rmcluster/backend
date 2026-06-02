@@ -26,19 +26,19 @@ type instanceFactoryImpl struct {
 	llmService     *llama.Llama
 	lowestPort     int              // the lowest port to use
 	usedPorts      map[int]struct{} // ports that are currently in use
-	phaseCallback  func(model, phase string, progress float64)
-	layersCallback func(layersOnRpc int)
+	phaseCallback  func(scopeID, model, phase string, progress float64)
+	layersCallback func(scopeID string, layersOnRpc int)
 }
 
 // SetPhaseCallback implements [PhaseCallbackSetter].
-func (i *instanceFactoryImpl) SetPhaseCallback(cb func(model, phase string, progress float64)) {
+func (i *instanceFactoryImpl) SetPhaseCallback(cb func(scopeID, model, phase string, progress float64)) {
 	i.Lock()
 	defer i.Unlock()
 	i.phaseCallback = cb
 }
 
 // SetLayersCallback implements [PhaseCallbackSetter].
-func (i *instanceFactoryImpl) SetLayersCallback(cb func(layersOnRpc int)) {
+func (i *instanceFactoryImpl) SetLayersCallback(cb func(scopeID string, layersOnRpc int)) {
 	i.Lock()
 	defer i.Unlock()
 	i.layersCallback = cb
@@ -47,12 +47,6 @@ func (i *instanceFactoryImpl) SetLayersCallback(cb func(layersOnRpc int)) {
 // StartInstance implements [InstanceFactory].
 func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instance, error) {
 	log.Printf("Starting instance for model %s on %d nodes", model, len(nodes))
-	i.Lock()
-	if cb := i.phaseCallback; cb != nil {
-		cb(model, PhaseStarting, 0)
-	}
-	i.Unlock()
-
 	// build list of rpc nodes
 	rpcNodes := make([]llama.RpcNode, len(nodes))
 	for idx, node := range nodes {
@@ -76,23 +70,30 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 	// instance's stored loading status as well as the factory-wide callbacks.
 	dead := make(chan struct{})
 	inst := &instanceImpl{
-		dead:  dead,
-		port:  port,
-		model: model,
-		nodes: nodes,
+		dead:    dead,
+		port:    port,
+		model:   model,
+		scopeID: model + "@" + strconv.Itoa(port),
+		nodes:   nodes,
 	}
 
+	i.Lock()
+	if cb := i.phaseCallback; cb != nil {
+		cb(inst.scopeID, model, PhaseStarting, 0)
+	}
+	i.Unlock()
+
 	// phaseCb will update the instance state and forward to factory callback.
-	phaseCb := func(m, phase string, progress float64) {
+	phaseCb := func(scopeID, m, phase string, progress float64) {
 		// forward to factory-level callback if present
 		i.Lock()
 		cb := i.phaseCallback
 		i.Unlock()
 		if cb != nil {
-			cb(m, phase, progress)
+			cb(scopeID, m, phase, progress)
 		}
 		// update instance-local state for the matching model
-		if m == inst.model {
+		if scopeID == inst.scopeID {
 			inst.mu.Lock()
 			inst.loadingPhase = phase
 			inst.loadingProgress = progress
@@ -100,16 +101,18 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 		}
 	}
 
-	layersCb := func(layersOnRPC int) {
+	layersCb := func(scopeID string, layersOnRPC int) {
 		i.Lock()
 		cb := i.layersCallback
 		i.Unlock()
 		if cb != nil {
-			cb(layersOnRPC)
+			cb(scopeID, layersOnRPC)
 		}
-		inst.mu.Lock()
-		inst.layersOnRPC = layersOnRPC
-		inst.mu.Unlock()
+		if scopeID == inst.scopeID {
+			inst.mu.Lock()
+			inst.layersOnRPC = layersOnRPC
+			inst.mu.Unlock()
+		}
 	}
 
 	cmd, err := func() (*exec.Cmd, error) {
@@ -126,7 +129,7 @@ func (i *instanceFactoryImpl) StartInstance(model string, nodes []Node) (Instanc
 		})
 		cmd.Stdout = newProcessLogWriter(model, "stdout", nil)
 		// i is already locked here — read callbacks directly, no re-lock
-		cmd.Stderr = newProcessLogWriter(model, "stderr", makePhaseDetector(model, phaseCb, layersCb))
+		cmd.Stderr = newProcessLogWriter(model, "stderr", makePhaseDetector(inst.scopeID, model, phaseCb, layersCb))
 
 		err := cmd.Start()
 		if err != nil {
@@ -242,7 +245,7 @@ func (w *processLogWriter) Write(p []byte) (int, error) {
 
 // makePhaseDetector returns an onLine hook that calls phaseCb whenever a known
 // loading phase is detected, and layersCb when the GPU offload count is known.
-func makePhaseDetector(model string, phaseCb func(model, phase string, progress float64), layersCb func(int)) func(string) {
+func makePhaseDetector(scopeID string, model string, phaseCb func(scopeID, model, phase string, progress float64), layersCb func(scopeID string, layersOnRpc int)) func(string) {
 	if phaseCb == nil && layersCb == nil {
 		return nil
 	}
@@ -251,30 +254,30 @@ func makePhaseDetector(model string, phaseCb func(model, phase string, progress 
 		if phaseCb != nil {
 			if firstLine {
 				firstLine = false
-				phaseCb(model, PhaseInitializing, 0)
+				phaseCb(scopeID, model, PhaseInitializing, 0)
 			}
 			switch {
 			case strings.Contains(line, ": downloading from "):
-				phaseCb(model, PhaseDownloading, 0)
+				phaseCb(scopeID, model, PhaseDownloading, 0)
 			case strings.Contains(line, "downloading") && strings.Contains(line, "%"):
 				var pct float64
 				if m := reProgressPct.FindStringSubmatch(line); m != nil {
 					pct, _ = strconv.ParseFloat(m[1], 64)
 				}
-				phaseCb(model, PhaseDownloading, pct)
+				phaseCb(scopeID, model, PhaseDownloading, pct)
 			case strings.Contains(line, "load_model: loading model"),
 				strings.Contains(line, "main: loading model"):
-				phaseCb(model, PhaseLoading, 0)
+				phaseCb(scopeID, model, PhaseLoading, 0)
 			case strings.Contains(line, "warming up"):
-				phaseCb(model, PhaseWarmingUp, 0)
+				phaseCb(scopeID, model, PhaseWarmingUp, 0)
 			case strings.Contains(line, "server is listening"):
-				phaseCb(model, PhaseReady, 0)
+				phaseCb(scopeID, model, PhaseReady, 0)
 			}
 		}
 		if layersCb != nil && strings.Contains(line, "offload") {
 			if m := reOffloadLayers.FindStringSubmatch(line); m != nil {
 				if n, err := strconv.Atoi(m[1]); err == nil {
-					layersCb(n)
+					layersCb(scopeID, n)
 				}
 			}
 		}

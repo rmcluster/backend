@@ -1,6 +1,7 @@
 package uiapi
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -109,6 +110,22 @@ type chatSessionRecord struct {
 	Events    []chatEvent `json:"events"`
 }
 
+type chatConversationResponse struct {
+	ID        string                    `json:"id"`
+	Title     string                    `json:"title"`
+	Model     string                    `json:"model"`
+	Messages  []chatConversationMessage `json:"messages"`
+	CreatedAt string                    `json:"created_at"`
+	UpdatedAt string                    `json:"updated_at"`
+	Status    string                    `json:"status"`
+}
+
+type chatConversationMessage struct {
+	Role         string   `json:"role"`
+	Content      string   `json:"content"`
+	TokensPerSec *float64 `json:"tokensPerSec,omitempty"`
+}
+
 // ---- Core handlers ----
 
 func (s *UIApi) handleAPIRoot(w http.ResponseWriter, r *http.Request) {
@@ -164,8 +181,12 @@ func (s *UIApi) handleAPIConnectInfo(w http.ResponseWriter, r *http.Request) {
 func (s *UIApi) handleAPIStartChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
 		w.Header().Del("Access-Control-Allow-Methods")
-		w.Header().Set("Access-Control-Allow-Methods", "POST")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST")
 		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if r.Method == http.MethodGet {
+		s.listChatSessions(w, r)
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -189,35 +210,23 @@ func (s *UIApi) handleAPIStartChat(w http.ResponseWriter, r *http.Request) {
 		startedAt = time.Now().UTC().Format(time.RFC3339)
 	}
 
-	session := chatSessionRecord{
-		ChatID:    req.ChatID,
-		Model:     req.Model,
-		StartedAt: startedAt,
-		Status:    "active",
-		Events:    []chatEvent{},
-	}
-
-	s.chatLock.Lock()
-	if _, exists := s.chatSessions[req.ChatID]; !exists && len(s.chatSessions) >= 500 {
-		s.chatLock.Unlock()
-		writeAPIError(w, http.StatusTooManyRequests, "chat session limit reached")
+	if err := s.chatStore.createConversation(r.Context(), req.ChatID, req.Model, startedAt); err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "failed to create chat session")
 		return
 	}
-	s.chatSessions[req.ChatID] = session
-	s.chatLock.Unlock()
 
 	writeAPIJSON(w, http.StatusCreated, map[string]any{
-		"chat_id":    session.ChatID,
-		"model":      session.Model,
-		"started_at": session.StartedAt,
-		"status":     session.Status,
+		"chat_id":    req.ChatID,
+		"model":      req.Model,
+		"started_at": startedAt,
+		"status":     "active",
 	})
 }
 
 func (s *UIApi) handleAPIChatRoute(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
 		w.Header().Del("Access-Control-Allow-Methods")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE")
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -239,7 +248,16 @@ func (s *UIApi) handleAPIChatRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(parts) == 2 && len(parts[1]) >= 4 && parts[1][:4] == "runs" {
+		s.handleChatRunRoute(w, r, chatID, parts[1])
+		return
+	}
+
 	if len(parts) == 1 {
+		if r.Method == http.MethodDelete {
+			s.deleteChatSession(w, r, chatID)
+			return
+		}
 		if r.Method != http.MethodGet {
 			writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -258,63 +276,101 @@ func (s *UIApi) appendChatEvent(w http.ResponseWriter, r *http.Request, chatID s
 		return
 	}
 
-	if req.EventType == "" || req.Timestamp == "" {
-		writeAPIError(w, http.StatusBadRequest, "event_type and timestamp are required")
-		return
-	}
-
-	validEventTypes := map[string]struct{}{
-		"message_sent": {}, "token_received": {}, "message_completed": {},
-		"stream_error": {}, "chat_closed": {},
-	}
-	if _, ok := validEventTypes[req.EventType]; !ok {
-		writeAPIError(w, http.StatusBadRequest, "invalid event_type")
-		return
-	}
-
-	const maxSessions = 500
-	const maxEventsPerSession = 1000
-
-	s.chatLock.Lock()
-	session, ok := s.chatSessions[chatID]
-	if !ok {
-		if len(s.chatSessions) >= maxSessions {
-			s.chatLock.Unlock()
-			writeAPIError(w, http.StatusTooManyRequests, "chat session limit reached")
-			return
+	if err := s.appendChatEventRecord(chatID, req); err != nil {
+		switch err.Error() {
+		case "event_type and timestamp are required", "invalid event_type", "event limit reached for this session":
+			writeAPIError(w, http.StatusBadRequest, err.Error())
+		case "chat session limit reached":
+			writeAPIError(w, http.StatusTooManyRequests, err.Error())
+		default:
+			writeAPIError(w, http.StatusInternalServerError, err.Error())
 		}
-		// Auto-create a minimal session for clients that skipped POST /api/ui/chats
-		// (e.g. after a server restart when in-memory sessions were lost).
-		session = chatSessionRecord{
-			ChatID:    chatID,
-			StartedAt: time.Now().Format(time.RFC3339),
-			Status:    "active",
-		}
-	}
-	if len(session.Events) >= maxEventsPerSession {
-		s.chatLock.Unlock()
-		writeAPIError(w, http.StatusUnprocessableEntity, "event limit reached for this session")
 		return
 	}
-	seq := len(session.Events) + 1
-	session.Events = append(session.Events, chatEvent{chatEventRequest: req, Sequence: seq})
-	s.chatSessions[chatID] = session
-	s.chatLock.Unlock()
 
 	writeAPIJSON(w, http.StatusAccepted, map[string]any{"status": "accepted"})
 }
 
-func (s *UIApi) getChatSession(w http.ResponseWriter, r *http.Request, chatID string) {
-	s.chatLock.Lock()
-	session, ok := s.chatSessions[chatID]
-	s.chatLock.Unlock()
+func (s *UIApi) appendChatEventRecord(chatID string, req chatEventRequest) error {
+	if req.EventType == "" || req.Timestamp == "" {
+		return fmt.Errorf("event_type and timestamp are required")
+	}
 
-	if !ok {
-		writeAPIError(w, http.StatusNotFound, "chat session not found")
+	validEventTypes := map[string]struct{}{
+		"message_sent": {}, "token_received": {}, "message_completed": {},
+		"stream_error": {}, "chat_closed": {}, "message_stopped": {},
+	}
+	if _, ok := validEventTypes[req.EventType]; !ok {
+		return fmt.Errorf("invalid event_type")
+	}
+
+	if err := s.chatStore.createConversation(context.Background(), chatID, "unknown", time.Now().UTC().Format(time.RFC3339)); err != nil {
+		return err
+	}
+	_, err := s.chatStore.appendEvent(context.Background(), chatID, req)
+	return err
+}
+
+func (s *UIApi) getChatSession(w http.ResponseWriter, r *http.Request, chatID string) {
+	conversation, err := s.chatStore.getConversation(r.Context(), chatID)
+	if err != nil {
+		if isNotFoundError(err) {
+			writeAPIError(w, http.StatusNotFound, "chat session not found")
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, "failed to read chat session")
 		return
 	}
 
-	writeAPIJSON(w, http.StatusOK, session)
+	writeAPIJSON(w, http.StatusOK, conversationResponse(conversation))
+}
+
+func (s *UIApi) listChatSessions(w http.ResponseWriter, r *http.Request) {
+	conversations, err := s.chatStore.listConversations(r.Context())
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "failed to list chat sessions")
+		return
+	}
+	payload := make([]chatConversationResponse, 0, len(conversations))
+	for _, conversation := range conversations {
+		payload = append(payload, conversationResponse(conversation))
+	}
+	writeAPIJSON(w, http.StatusOK, map[string]any{"conversations": payload})
+}
+
+func (s *UIApi) deleteChatSession(w http.ResponseWriter, r *http.Request, chatID string) {
+	if err := s.chatStore.deleteConversation(r.Context(), chatID); err != nil {
+		if isNotFoundError(err) {
+			writeAPIError(w, http.StatusNotFound, "chat session not found")
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, "failed to delete chat session")
+		return
+	}
+	s.runLock.Lock()
+	delete(s.activeRuns, chatID)
+	s.runLock.Unlock()
+	writeAPIJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
+}
+
+func conversationResponse(conversation persistedConversation) chatConversationResponse {
+	messages := make([]chatConversationMessage, 0, len(conversation.Messages))
+	for _, message := range conversation.Messages {
+		messages = append(messages, chatConversationMessage{
+			Role:         message.Role,
+			Content:      message.Content,
+			TokensPerSec: message.TokensPerSec,
+		})
+	}
+	return chatConversationResponse{
+		ID:        conversation.ChatID,
+		Title:     conversation.Title,
+		Model:     conversation.Model,
+		Messages:  messages,
+		CreatedAt: conversation.CreatedAt,
+		UpdatedAt: conversation.UpdatedAt,
+		Status:    conversation.Status,
+	}
 }
 
 // ---- noopResponseWriter ----
@@ -654,30 +710,6 @@ func (s *UIApi) handleAPILocalModelUpload(w http.ResponseWriter, r *http.Request
 		LinkHref:     entry.LinkHref,
 		LinkLabel:    entry.LinkLabel,
 	})
-}
-
-func (s *UIApi) handleLoadingStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodOptions {
-		w.Header().Del("Access-Control-Allow-Methods")
-		w.Header().Set("Access-Control-Allow-Methods", "GET")
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-	type response struct {
-		Model       string  `json:"model"`
-		Phase       string  `json:"phase"`
-		Progress    float64 `json:"progress"`
-		LayersOnRPC int     `json:"layers_on_rpc"`
-		NodeCount   int     `json:"node_count"`
-	}
-
-	var resp response
-	if s.loadingStatus != nil {
-		resp.Model, resp.Phase, resp.Progress, resp.LayersOnRPC = s.loadingStatus.GetLoadingStatus()
-	}
-	resp.NodeCount = len(s.tracker.GetServers())
-
-	writeAPIJSON(w, http.StatusOK, resp)
 }
 
 func (s *UIApi) handleAPIDashboard(w http.ResponseWriter, r *http.Request) {

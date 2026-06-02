@@ -19,6 +19,7 @@ type instanceImpl struct {
 	dead            chan struct{}
 	port            int
 	model           string
+	scopeID         string
 	mu              sync.Mutex
 	loadingPhase    string
 	loadingProgress float64
@@ -29,6 +30,11 @@ type instanceImpl struct {
 // Model implements [Instance].
 func (i *instanceImpl) Model() string {
 	return i.model
+}
+
+// LoadingStatusScopeID implements [Instance].
+func (i *instanceImpl) LoadingStatusScopeID() string {
+	return i.scopeID
 }
 
 // WaitReady implements [Instance].

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -126,8 +127,6 @@ func main() {
 	cas := gcas.NewGCAS(gcasdb)
 	tracker.DefaultTracker.Subscribe(gcassubscriber.NewGCASSubscriber(cas))
 	server := server.NewServer(ramalama, scheduler)
-	ui := uiapi.New(tracker.DefaultTracker, ramalama, loadingTracker)
-	ui.RegisterHandlers(mux)
 
 	if args.Storagedb == nil {
 		log.Fatalf("No storage database specified")
@@ -145,6 +144,21 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create storage service: %v", err)
 	}
+	chatdbPath := strings.TrimSpace(os.Getenv("RMD_CHAT_DB_PATH"))
+	if chatdbPath == "" {
+		chatdbPath = defaultChatDBPath(*args.Storagedb)
+	}
+	chatdb, err := uiapi.OpenChatDB(chatdbPath, 1)
+	if err != nil {
+		log.Fatalf("Failed to open chat database: %v", err)
+	}
+	defer func() {
+		if err := chatdb.Close(); err != nil {
+			log.Printf("Failed to close chat database: %v", err)
+		}
+	}()
+	ui := uiapi.New(tracker.DefaultTracker, ramalama, scheduler, loadingTracker, chatdb)
+	ui.RegisterHandlers(mux)
 	webdavService := webdavservice.NewWebDavService(storageSvc)
 	webdavService.RegisterGinHandlers(router)
 
@@ -165,4 +179,13 @@ func main() {
 	err = http.Serve(l, requestLogger(corsMiddleware(router)))
 
 	log.Fatalf("Failed to serve: %v", err)
+}
+
+func defaultChatDBPath(storageDBPath string) string {
+	ext := filepath.Ext(storageDBPath)
+	base := strings.TrimSuffix(storageDBPath, ext)
+	if base == "" {
+		base = storageDBPath
+	}
+	return base + ".chat.db"
 }

@@ -1,6 +1,8 @@
 package uiapi
 
 import (
+	"context"
+	"database/sql"
 	"log"
 	"net/http"
 	"os"
@@ -17,12 +19,16 @@ import (
 type UIApi struct {
 	tracker       *tracker.Tracker
 	llama         llama.Llama
+	scheduler     scheduling.Scheduler
 	loadingStatus scheduling.LoadingStatusProvider // may be nil
+	chatStore     *chatStore
 
 	connectLock   sync.Mutex
 	connectTokens map[string]time.Time
 	chatLock      sync.Mutex
 	chatSessions  map[string]chatSessionRecord
+	runLock       sync.Mutex
+	activeRuns    map[string]*chatRunState
 }
 
 var (
@@ -30,15 +36,30 @@ var (
 	hfStore     *hfMetadataStore
 )
 
-func New(tracker *tracker.Tracker, llama llama.Llama, loadingStatus scheduling.LoadingStatusProvider) *UIApi {
+func New(
+	tracker *tracker.Tracker,
+	llama llama.Llama,
+	scheduler scheduling.Scheduler,
+	loadingStatus scheduling.LoadingStatusProvider,
+	chatDB *sql.DB,
+) *UIApi {
 	initHFMetadataStoreFromEnv()
-	return &UIApi{
+	store := newChatStore(chatDB)
+	_ = store.normalizeInterruptedRuns(context.Background())
+	api := &UIApi{
 		tracker:       tracker,
 		llama:         llama,
+		scheduler:     scheduler,
 		loadingStatus: loadingStatus,
+		chatStore:     store,
 		connectTokens: make(map[string]time.Time),
 		chatSessions:  make(map[string]chatSessionRecord),
+		activeRuns:    make(map[string]*chatRunState),
 	}
+	if broadcaster, ok := loadingStatus.(scheduling.LoadingStatusBroadcaster); ok {
+		broadcaster.Subscribe(api.onLoadingStatusUpdate)
+	}
+	return api
 }
 
 func initHFMetadataStoreFromEnv() {
@@ -71,7 +92,6 @@ func defaultMetadataDBPath() string {
 
 func (s *UIApi) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ui", s.handleAPIRoot)
-	mux.HandleFunc("GET /api/ui/loading-status", s.handleLoadingStatus)
 	mux.HandleFunc("/api/ui/models", s.handleAPIModels)
 	mux.HandleFunc("/api/ui/models/search", s.handleAPISearchModels)
 	mux.HandleFunc("/api/ui/models/hf", s.handleAPIAddHFModel)

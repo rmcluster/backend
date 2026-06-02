@@ -21,9 +21,16 @@ type LoadingStatusProvider interface {
 	GetLoadingStatus() (model, phase string, progress float64, layersOnRpc int)
 }
 
+// LoadingStatusBroadcaster optionally allows listeners to subscribe to loading
+// state changes for richer UI experiences such as resumable per-chat progress.
+type LoadingStatusBroadcaster interface {
+	LoadingStatusProvider
+	Subscribe(func(scopeID, model, phase string, progress float64, layersOnRpc int)) func()
+}
+
 // PhaseCallbackSetter is optionally implemented by an InstanceFactory so
 // the scheduler can register a hook that fires whenever the loading phase changes.
 type PhaseCallbackSetter interface {
-	SetPhaseCallback(func(model, phase string, progress float64))
-	SetLayersCallback(func(layersOnRpc int))
+	SetPhaseCallback(func(scopeID, model, phase string, progress float64))
+	SetLayersCallback(func(scopeID string, layersOnRpc int))
 }

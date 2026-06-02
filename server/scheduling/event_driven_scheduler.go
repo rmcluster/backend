@@ -1,6 +1,7 @@
 package scheduling
 
 import (
+	"fmt"
 	"log"
 	"math"
 	"os"
@@ -76,6 +77,7 @@ func (d scheduleDecision) taskAge() string {
 const (
 	DefaultMemoryTargetMultiplier       = 1.0
 	DefaultMemoryTargetBytes      int64 = 1 << 30
+	instanceReadyTimeout                = 45 * time.Second
 )
 
 type EventDrivenScheduler struct {
@@ -399,6 +401,9 @@ func (s *EventDrivenScheduler) executeReuseDecision(decision scheduleDecision) {
 
 	s.removeIdleInstance(decision.instance.instance)
 	s.dequeueTask(decision.task)
+	if aware, ok := decision.task.task.(InstanceAssignmentAware); ok {
+		aware.OnInstanceAssigned(decision.instance.instance)
+	}
 	go s.performTask(decision.task, decision.instance)
 }
 
@@ -418,6 +423,9 @@ func (s *EventDrivenScheduler) executeCreateDecision(decision scheduleDecision) 
 		decision.task.task.Fail(err)
 		return
 	}
+	if aware, ok := decision.task.task.(InstanceAssignmentAware); ok {
+		aware.OnInstanceAssigned(instance)
+	}
 
 	info := instanceState{instance: instance, usedNodes: decision.nodes}
 	s.activeInstances[instance] = info
@@ -432,10 +440,26 @@ func (s *EventDrivenScheduler) executeCreateDecision(decision scheduleDecision) 
 	}()
 
 	go func() {
-		if err := instance.WaitReady(); err != nil {
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- instance.WaitReady()
+		}()
+
+		var err error
+		select {
+		case err = <-errCh:
+		case <-time.After(instanceReadyTimeout):
+			err = fmt.Errorf(
+				"model startup timed out after %s on nodes %s",
+				instanceReadyTimeout.String(),
+				nodeList(decision.nodes),
+			)
+			instance.Stop()
+		}
+
+		if err != nil {
 			log.Printf("EventDrivenScheduler: failed to wait for instance readiness: %v", err)
 			decision.task.task.Fail(err)
-			s.instanceDeadChan <- info
 			return
 		}
 		go s.performTask(decision.task, info)

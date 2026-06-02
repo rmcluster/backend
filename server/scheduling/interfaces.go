@@ -8,6 +8,7 @@ import (
 
 type Instance interface {
 	Model() string
+	LoadingStatusScopeID() string
 	GetOpenAIClient() openai.Client
 	ReverseProxy() *httputil.ReverseProxy
 	WaitReady() error // block until instance is ready to serve requests. note that the instance may die after returning
@@ -38,4 +39,8 @@ type Task interface {
 	Model() string
 	PerformInference(instance Instance) error
 	Fail(err error)
+}
+
+type InstanceAssignmentAware interface {
+	OnInstanceAssigned(instance Instance)
 }

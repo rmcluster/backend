@@ -157,13 +157,13 @@ func (f *FcfsScheduler) pump() {
 }
 
 // GetLoadingStatus implements [LoadingStatusProvider].
-func (f *FcfsScheduler) GetLoadingStatus() (model, phase string, progress float64) {
+func (f *FcfsScheduler) GetLoadingStatus() (model, phase string, progress float64, layersOnRpc int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.state != stateStarting {
-		return "", "", 0
+		return "", "", 0, 0
 	}
-	return f.activeModel, f.loadingPhase, f.loadingProgress
+	return f.activeModel, f.loadingPhase, f.loadingProgress, 0
 }
 
 func (f *FcfsScheduler) startInstance(model string, nodes []Node) {
@@ -173,7 +173,7 @@ func (f *FcfsScheduler) startInstance(model string, nodes []Node) {
 	f.mu.Unlock()
 
 	if setter, ok := f.factory.(PhaseCallbackSetter); ok {
-		setter.SetPhaseCallback(func(m, phase string, progress float64) {
+		setter.SetPhaseCallback(func(_ string, m, phase string, progress float64) {
 			f.mu.Lock()
 			if f.activeModel == m {
 				f.loadingPhase = phase
@@ -193,6 +193,16 @@ func (f *FcfsScheduler) startInstance(model string, nodes []Node) {
 	var instance Instance
 	if err == nil {
 		instance, err = f.factory.StartInstance(model, nodes)
+	}
+
+	var firstTask Task
+	f.mu.Lock()
+	if len(f.queue) > 0 && f.queue[0].Model() == model {
+		firstTask = f.queue[0]
+	}
+	f.mu.Unlock()
+	if aware, ok := firstTask.(InstanceAssignmentAware); ok && err == nil {
+		aware.OnInstanceAssigned(instance)
 	}
 
 	if err == nil {
