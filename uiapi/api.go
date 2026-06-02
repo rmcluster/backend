@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/rmcluster/backend/server/scheduling"
 )
 
 // ---- API types ----
@@ -77,12 +79,31 @@ type connectInfoResponse struct {
 	TokenExpiresInSeconds int    `json:"token_expires_in_seconds"`
 }
 
-type parallelismTargetResponse struct {
-	ParallelismTarget int `json:"parallelism_target"`
+type tunablesSectionResponse struct {
+	Key    string                   `json:"key"`
+	Label  string                   `json:"label"`
+	Specs  []scheduling.TunableSpec `json:"specs"`
+	Values map[string]any           `json:"values"`
 }
 
-type parallelismTargetRequest struct {
-	ParallelismTarget int `json:"parallelism_target"`
+type tunablesResponse struct {
+	Sections []tunablesSectionResponse `json:"sections"`
+}
+
+type tunablesRequest struct {
+	Section string         `json:"section"`
+	Values  map[string]any `json:"values"`
+}
+
+const (
+	tunablesSectionScheduler = "scheduler"
+	tunablesSectionStorage   = "storage"
+)
+
+type tunablesSectionSource struct {
+	key    string
+	label  string
+	source tunableSection
 }
 
 // ---- Chat session types ----
@@ -688,31 +709,85 @@ func (s *UIApi) handleLoadingStatus(w http.ResponseWriter, r *http.Request) {
 	writeAPIJSON(w, http.StatusOK, resp)
 }
 
-func (s *UIApi) handleParallelismTarget(w http.ResponseWriter, r *http.Request) {
-	if s.scheduler == nil {
-		writeAPIError(w, http.StatusNotImplemented, "scheduler controls unavailable")
-		return
+func (s *UIApi) tunableSectionSources() []tunablesSectionSource {
+	sources := make([]tunablesSectionSource, 0, 2)
+	if s.scheduler != nil {
+		sources = append(sources, tunablesSectionSource{
+			key:    tunablesSectionScheduler,
+			label:  "Scheduler",
+			source: s.scheduler,
+		})
+	}
+	if s.storage != nil {
+		sources = append(sources, tunablesSectionSource{
+			key:    tunablesSectionStorage,
+			label:  "Storage",
+			source: s.storage,
+		})
+	}
+	return sources
+}
+
+func (s *UIApi) tunablesSectionSnapshot(section tunablesSectionSource) tunablesSectionResponse {
+	specs := section.source.TunableSpecs()
+	if section.key == tunablesSectionScheduler && len(specs) > 0 {
+		nodeCount := len(s.tracker.GetServers())
+		for i := range specs {
+			if specs[i].Key != scheduling.TunableParallelismTarget || nodeCount <= 0 {
+				continue
+			}
+			max := float64(nodeCount)
+			specs[i].Max = &max
+		}
 	}
 
+	return tunablesSectionResponse{
+		Key:    section.key,
+		Label:  section.label,
+		Specs:  specs,
+		Values: section.source.TunableValues(),
+	}
+}
+
+func (s *UIApi) tunablesSnapshot() tunablesResponse {
+	sources := s.tunableSectionSources()
+	sections := make([]tunablesSectionResponse, 0, len(sources))
+	for _, source := range sources {
+		sections = append(sections, s.tunablesSectionSnapshot(source))
+	}
+	return tunablesResponse{Sections: sections}
+}
+
+func (s *UIApi) handleTunables(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeAPIJSON(w, http.StatusOK, parallelismTargetResponse{
-			ParallelismTarget: s.scheduler.GetParallelismTarget(),
-		})
+		writeAPIJSON(w, http.StatusOK, s.tunablesSnapshot())
 	case http.MethodPost:
-		var req parallelismTargetRequest
+		var req tunablesRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeAPIError(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
-		if req.ParallelismTarget < 0 {
-			writeAPIError(w, http.StatusBadRequest, "parallelism_target must be 0 or more")
+		if req.Section == "" {
+			writeAPIError(w, http.StatusBadRequest, "section is required")
 			return
 		}
-		s.scheduler.SetParallelismTarget(req.ParallelismTarget)
-		writeAPIJSON(w, http.StatusOK, parallelismTargetResponse{
-			ParallelismTarget: s.scheduler.GetParallelismTarget(),
-		})
+		if len(req.Values) == 0 {
+			writeAPIError(w, http.StatusBadRequest, "values must not be empty")
+			return
+		}
+		for _, section := range s.tunableSectionSources() {
+			if section.key != req.Section {
+				continue
+			}
+			if err := section.source.ApplyTunables(req.Values); err != nil {
+				writeAPIError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeAPIJSON(w, http.StatusOK, s.tunablesSectionSnapshot(section))
+			return
+		}
+		writeAPIError(w, http.StatusBadRequest, "unknown section")
 	default:
 		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
