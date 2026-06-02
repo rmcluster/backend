@@ -11,16 +11,17 @@ import (
 	"github.com/rmcluster/backend/server/gcas"
 )
 
-const ChunkSize = 8 * 1024 * 1024 //8 MiB chunks for now, can be changed later to other value, or made variable with file size
+const DefaultChunkSize int64 = 8 * 1024 * 1024
 
 type commitFn func(ctx context.Context, path string, mode fs.FileMode, chunks []chunkRef, totalSize int64) error
 
 type writeFile struct {
-	path   string
-	mode   fs.FileMode
-	gcas   gcas.GCAS
-	commit commitFn
-	ctx    context.Context
+	path      string
+	mode      fs.FileMode
+	gcas      gcas.GCAS
+	commit    commitFn
+	ctx       context.Context
+	chunkSize int64
 
 	buf       []byte
 	chunks    []chunkRef
@@ -30,14 +31,15 @@ type writeFile struct {
 	committed bool
 }
 
-func newWriteFile(ctx context.Context, path string, mode fs.FileMode, g gcas.GCAS, commit commitFn) *writeFile {
+func newWriteFile(ctx context.Context, path string, mode fs.FileMode, g gcas.GCAS, commit commitFn, chunkSize int64) *writeFile {
 	return &writeFile{
-		path:   path,
-		mode:   mode,
-		gcas:   g,
-		commit: commit,
-		ctx:    ctx,
-		buf:    make([]byte, 0, ChunkSize),
+		path:      path,
+		mode:      mode,
+		gcas:      g,
+		commit:    commit,
+		ctx:       ctx,
+		chunkSize: chunkSize,
+		buf:       make([]byte, 0, chunkSize),
 	}
 }
 
@@ -74,7 +76,7 @@ func (f *writeFile) Write(p []byte) (int, error) {
 
 	written := 0
 	for written < len(p) {
-		space := ChunkSize - len(f.buf)
+		space := int(f.chunkSize) - len(f.buf)
 		take := len(p) - written
 		if take > space {
 			take = space
@@ -83,7 +85,7 @@ func (f *writeFile) Write(p []byte) (int, error) {
 		f.buf = append(f.buf, p[written:written+take]...)
 		written += take
 
-		if len(f.buf) == ChunkSize {
+		if int64(len(f.buf)) == f.chunkSize {
 			if err := f.flushChunk(); err != nil {
 				return written, err
 			}

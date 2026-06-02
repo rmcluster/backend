@@ -287,6 +287,68 @@ func newServiceWithGCAS(t *testing.T) (*StorageServiceImpl, *fakeCAS) {
 	return svc, cas
 }
 
+func TestStorageServiceDefaultChunkSize(t *testing.T) {
+	svc, _ := newServiceWithGCAS(t)
+	if got := svc.GetChunkSize(); got != DefaultChunkSize {
+		t.Fatalf("GetChunkSize() = %d, want %d", got, DefaultChunkSize)
+	}
+}
+
+func TestStorageServiceCustomChunkSizeSplitsWrites(t *testing.T) {
+	ctx := context.Background()
+	svc, cas := newServiceWithGCAS(t)
+	if err := svc.SetChunkSize(4 * 1024 * 1024); err != nil {
+		t.Fatalf("SetChunkSize: %v", err)
+	}
+
+	f, err := svc.OpenFile(ctx, "/split.txt", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := uniqueData(10 * 1024 * 1024)
+	if _, err := f.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(cas.data) != 3 {
+		t.Fatalf("want 3 chunks in GCAS, got %d", len(cas.data))
+	}
+}
+
+func TestStorageServiceChunkSizeOnlyAffectsNewWrites(t *testing.T) {
+	ctx := context.Background()
+	svc, cas := newServiceWithGCAS(t)
+
+	mustWrite(t, svc, "/before.txt", uniqueData(10*1024*1024))
+	if len(cas.data) != 2 {
+		t.Fatalf("before chunk-size change want 2 chunks, got %d", len(cas.data))
+	}
+
+	if err := svc.SetChunkSize(4 * 1024 * 1024); err != nil {
+		t.Fatalf("SetChunkSize: %v", err)
+	}
+	mustWrite(t, svc, "/after.txt", uniqueData(10*1024*1024+123))
+	if len(cas.data) != 5 {
+		t.Fatalf("after chunk-size change want 5 total chunks, got %d", len(cas.data))
+	}
+
+	r, err := svc.OpenFile(ctx, "/before.txt", os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 10*1024*1024 {
+		t.Fatalf("before.txt size = %d, want %d", len(got), 10*1024*1024)
+	}
+}
+
 func TestOpenFileWriteCreate(t *testing.T) {
 	ctx := context.Background()
 	svc, cas := newServiceWithGCAS(t)
@@ -395,6 +457,14 @@ func mustWrite(t *testing.T, svc *StorageServiceImpl, p string, body []byte) {
 	if err := f.Close(); err != nil {
 		t.Fatalf("close %s: %v", p, err)
 	}
+}
+
+func uniqueData(size int) []byte {
+	data := make([]byte, size)
+	for i := range data {
+		data[i] = byte(i % 251)
+	}
+	return data
 }
 
 func TestRemoveAllFile(t *testing.T) {

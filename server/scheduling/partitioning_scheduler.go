@@ -115,11 +115,11 @@ func (s *PartitioningScheduler) OnTaskCancelled(task Task) {
 	s.taskCancelledChan <- task
 }
 
-func (s *PartitioningScheduler) GetParallelismTarget() int {
+func (s *PartitioningScheduler) getParallelismTarget() int {
 	return int(s.parallelismTarget.Load())
 }
 
-func (s *PartitioningScheduler) SetParallelismTarget(n int) {
+func (s *PartitioningScheduler) setParallelismTarget(n int) {
 	if n < 1 {
 		n = 1
 	}
@@ -210,7 +210,7 @@ taskHandlerLoop:
 						}
 					}
 
-					if len(s.unallocatedNodes) >= s.GetParallelismTarget() {
+					if len(s.unallocatedNodes) >= s.getParallelismTarget() {
 						break killLoop
 					}
 				}
@@ -245,7 +245,7 @@ taskHandlerLoop:
 
 		// create new instance
 		nodes := []Node{}
-		target := s.GetParallelismTarget()
+		target := s.getParallelismTarget()
 		for _, node := range s.unallocatedNodes {
 			nodes = append(nodes, node)
 			if len(nodes) == target {

@@ -14,16 +14,18 @@ import (
 	"github.com/rmcluster/backend/tracker"
 )
 
-type schedulerControl interface {
-	GetParallelismTarget() int
-	SetParallelismTarget(int)
+type tunableSection interface {
+	TunableSpecs() []scheduling.TunableSpec
+	TunableValues() map[string]any
+	ApplyTunables(map[string]any) error
 }
 
 type UIApi struct {
 	tracker       *tracker.Tracker
 	llama         llama.Llama
 	loadingStatus scheduling.LoadingStatusProvider // may be nil
-	scheduler     schedulerControl
+	scheduler     scheduling.TunableScheduler
+	storage       tunableSection
 
 	connectLock   sync.Mutex
 	connectTokens map[string]time.Time
@@ -36,13 +38,20 @@ var (
 	hfStore     *hfMetadataStore
 )
 
-func New(tracker *tracker.Tracker, llama llama.Llama, loadingStatus scheduling.LoadingStatusProvider, scheduler schedulerControl) *UIApi {
+func New(
+	tracker *tracker.Tracker,
+	llama llama.Llama,
+	loadingStatus scheduling.LoadingStatusProvider,
+	scheduler scheduling.TunableScheduler,
+	storage tunableSection,
+) *UIApi {
 	initHFMetadataStoreFromEnv()
 	return &UIApi{
 		tracker:       tracker,
 		llama:         llama,
 		loadingStatus: loadingStatus,
 		scheduler:     scheduler,
+		storage:       storage,
 		connectTokens: make(map[string]time.Time),
 		chatSessions:  make(map[string]chatSessionRecord),
 	}
@@ -87,7 +96,7 @@ func (s *UIApi) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ui/connect-info", s.handleAPIConnectInfo)
 	mux.HandleFunc("/api/ui/chats", s.handleAPIStartChat)
 	mux.HandleFunc("/api/ui/chats/", s.handleAPIChatRoute)
-	mux.HandleFunc("/api/ui/parallelism-target", s.handleParallelismTarget)
+	mux.HandleFunc("/api/ui/tunables", s.handleTunables)
 }
 
 func (s *UIApi) listModelEntries() []modelEntry {
