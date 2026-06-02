@@ -399,6 +399,11 @@ func (s *UIApi) consumeConnectToken(token string) bool {
 
 // ---- Network utilities ----
 
+var (
+	netInterfaces = net.Interfaces
+	ifaceAddrs    = func(iface net.Interface) ([]net.Addr, error) { return iface.Addrs() }
+)
+
 func preferredConnectHostPort(r *http.Request) (string, int) {
 	if host := strings.TrimSpace(os.Getenv("RMD_CONNECT_HOST")); host != "" {
 		return strings.Trim(host, "[]"), 4917
@@ -434,13 +439,17 @@ func preferredConnectHostPort(r *http.Request) (string, int) {
 }
 
 func preferredConnectHost(host string) string {
-	if !isLoopbackHost(host) {
+	if !shouldPreferLANHost(host) {
 		return host
 	}
 	if lanIP, ok := firstNonLoopbackIPv4(); ok {
 		return lanIP
 	}
 	return host
+}
+
+func shouldPreferLANHost(host string) bool {
+	return isLoopbackHost(host) || isContainerBridgeHost(host)
 }
 
 func isLoopbackHost(host string) bool {
@@ -451,8 +460,47 @@ func isLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+func isContainerBridgeHost(host string) bool {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+
+	ifaces, err := netInterfaces()
+	if err != nil {
+		return false
+	}
+
+	for _, iface := range ifaces {
+		if !isContainerBridgeInterface(iface.Name) {
+			continue
+		}
+
+		addrs, err := ifaceAddrs(iface)
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			if addrContainsIP(addr, ip) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func isContainerBridgeInterface(name string) bool {
+	return strings.HasPrefix(name, "docker") ||
+		strings.HasPrefix(name, "br-") ||
+		strings.HasPrefix(name, "veth") ||
+		strings.HasPrefix(name, "cni") ||
+		strings.HasPrefix(name, "virbr")
+}
+
 func firstNonLoopbackIPv4() (string, bool) {
-	ifaces, err := net.Interfaces()
+	ifaces, err := netInterfaces()
 	if err != nil {
 		return "", false
 	}
@@ -461,11 +509,11 @@ func firstNonLoopbackIPv4() (string, bool) {
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
 			continue
 		}
-		if strings.HasPrefix(iface.Name, "docker") || strings.HasPrefix(iface.Name, "br-") || strings.HasPrefix(iface.Name, "veth") {
+		if isContainerBridgeInterface(iface.Name) {
 			continue
 		}
 
-		addrs, err := iface.Addrs()
+		addrs, err := ifaceAddrs(iface)
 		if err != nil {
 			continue
 		}
@@ -490,6 +538,17 @@ func firstNonLoopbackIPv4() (string, bool) {
 	}
 
 	return "", false
+}
+
+func addrContainsIP(addr net.Addr, target net.IP) bool {
+	switch v := addr.(type) {
+	case *net.IPNet:
+		return v.Contains(target)
+	case *net.IPAddr:
+		return v.IP != nil && v.IP.Equal(target)
+	default:
+		return false
+	}
 }
 
 // ---- Model handlers ----
