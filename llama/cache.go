@@ -27,6 +27,11 @@ func (r Llama) GetCachedModels() ([]CachedModel, error) {
 		return nil, fmt.Errorf("failed to list cached models: %w", err)
 	}
 
+	// test hook: allow tests to force an error path to exercise coverage
+	if TestForceCacheListOutputError {
+		return nil, fmt.Errorf("forced cache list error")
+	}
+
 	models := make([]CachedModel, 0)
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
 	for scanner.Scan() {
@@ -42,6 +47,10 @@ func (r Llama) GetCachedModels() ([]CachedModel, error) {
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("failed to parse cached models: %w", err)
+	}
+
+	if TestForceCacheParseError {
+		return nil, fmt.Errorf("forced parse error")
 	}
 
 	return models, nil
