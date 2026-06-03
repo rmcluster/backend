@@ -19,9 +19,10 @@ type customChatTask struct {
 }
 
 type customChatStatusEvent struct {
-	Type       string  `json:"type"`
-	Phase      string  `json:"phase"`
-	Percentage float64 `json:"percentage"`
+	Type        string  `json:"type"`
+	Phase       string  `json:"phase"`
+	Percentage  float64 `json:"percentage"`
+	LayersOnGpu int     `json:"layers_on_gpu,omitempty"`
 }
 
 type customChatTokenEvent struct {
@@ -169,7 +170,7 @@ func (p *customChatTask) PerformInference(instance scheduling.Instance) (err err
 	// send a status event for the start of the completion
 	err = sendEvent(customChatStatusEvent{
 		Type:       "status",
-		Phase:      "started",
+		Phase:      scheduling.PhaseStarting,
 		Percentage: 0,
 	})
 	if err != nil {
@@ -183,15 +184,17 @@ func (p *customChatTask) PerformInference(instance scheduling.Instance) (err err
 	// start a goroutine to poll the completion status and send status events on changes
 	go func() {
 		defer routinesDone.Done()
-		lastStatus := "started"
+		lastStatus := scheduling.PhaseStarting
 		lastPercentage := 0.0
+		lastLayers := 0
 		for {
-			_, status, percentage, _ := instance.GetLoadingStatus()
-			if status != lastStatus || percentage != lastPercentage {
+			_, status, percentage, layers := instance.GetLoadingStatus()
+			if status != lastStatus || percentage != lastPercentage || layers != lastLayers {
 				err := sendEvent(customChatStatusEvent{
-					Type:       "status",
-					Phase:      status,
-					Percentage: percentage,
+					Type:        "status",
+					Phase:       status,
+					Percentage:  percentage,
+					LayersOnGpu: layers,
 				})
 				if err != nil {
 					log.Printf("Failed to send status event: %v", err)
@@ -199,6 +202,7 @@ func (p *customChatTask) PerformInference(instance scheduling.Instance) (err err
 
 				lastStatus = status
 				lastPercentage = percentage
+				lastLayers = layers
 			}
 			select {
 			case <-p.r.Context().Done():
