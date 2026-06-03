@@ -1,4 +1,4 @@
-FROM docker.io/golang:1.26.2@sha256:1e598ea5752ae26c093b746fd73c5095af97d6f2d679c43e83e0eac484a33dc3 AS builder
+FROM docker.io/golang:1.26.4@sha256:68cb6d68bed024785b69195b89af7ac7a444f27791435f98647edff595aa0479 AS builder
 WORKDIR /build-dir
 
 COPY go.mod go.sum ./
