@@ -37,13 +37,22 @@ func (r Llama) Inspect(name string) (InspectInfo, error) {
 	cliArgs := slices.Concat(r.Command[1:], []string{"inspect", "--json", "--all", name})
 	cmd := exec.Command(r.Command[0], cliArgs...)
 
-	pipe, err := cmd.StdoutPipe()
-	if err != nil {
-		return InspectInfo{}, fmt.Errorf("failed to pipe command: %v", err)
+	pipe, pipeErr := cmd.StdoutPipe()
+	if TestForceInspectPipeError {
+		pipeErr = fmt.Errorf("forced")
+	}
+	if pipeErr != nil {
+		return InspectInfo{}, fmt.Errorf("failed to pipe command: %v", pipeErr)
 	}
 
-	if err := cmd.Start(); err != nil {
-		return InspectInfo{}, fmt.Errorf("failed to start command: %v", err)
+	var startErr error
+	if TestForceInspectStartError {
+		startErr = fmt.Errorf("forced")
+	} else {
+		startErr = cmd.Start()
+	}
+	if startErr != nil {
+		return InspectInfo{}, fmt.Errorf("failed to start command: %v", startErr)
 	}
 
 	var info InspectInfo
