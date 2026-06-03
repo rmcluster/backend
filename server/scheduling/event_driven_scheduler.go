@@ -306,7 +306,9 @@ func (s *EventDrivenScheduler) pickNodesForNewInstance(model string) ([]Node, bo
 	total := int64(0)
 	for _, node := range available {
 		selected = append(selected, node)
-		total += node.MaxSize()
+		if size := node.MaxSize(); size > 0 {
+			total += size
+		}
 		if total >= target {
 			return selected, true
 		}
@@ -319,11 +321,19 @@ func (s *EventDrivenScheduler) pickNodesForNewInstance(model string) ([]Node, bo
 		}
 		for _, node := range inst.usedNodes {
 			selected = append(selected, node)
-			total += node.MaxSize()
+			if size := node.MaxSize(); size > 0 {
+				total += size
+			} else {
+				total += 1
+			}
 		}
 		if total >= target {
 			return selected, true
 		}
+	}
+
+	if total > 0 {
+		return selected, true
 	}
 
 	return nil, false
