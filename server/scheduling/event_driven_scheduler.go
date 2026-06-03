@@ -75,7 +75,7 @@ func (d scheduleDecision) taskAge() string {
 }
 
 const (
-	DefaultMemoryTargetMultiplier       = 1.0
+	DefaultMemoryTargetMultiplier       = 4
 	DefaultMemoryTargetBytes      int64 = 1 << 30
 )
 
@@ -118,7 +118,7 @@ func NewEventDrivenScheduler(instanceFactory InstanceFactory, llmService llama.L
 		instanceDeadChan:       make(chan instanceState, 16),
 		memoryTargetMultiplier: memoryTargetMultiplier,
 		modelSizeCache:         make(map[string]int64),
-		idleBias: 10 * time.Second,
+		idleBias:               10 * time.Second,
 	}
 	go scheduler.run()
 	return scheduler
