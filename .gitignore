@@ -2,3 +2,12 @@
 .env
 gcas.db
 rmd
+gcas2.db
+gcas2.db-shm
+gcas2.db-wal
+storage.db
+storage.db-shm
+storage.db-wal
+storage2.db
+storage2.db-shm
+storage2.db-wal
